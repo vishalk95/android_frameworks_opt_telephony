@@ -122,11 +122,11 @@ public class RIL extends BaseCommands implements CommandsInterface {
 
     static final int RIL_REQUEST_VENDOR_BASE = 2000;
     static final int RIL_REQUEST_MODEM_POWEROFF = (RIL_REQUEST_VENDOR_BASE + 10);
-//    static final int RIL_REQUEST_DUAL_SIM_MODE_SWITCH  = (RIL_REQUEST_VENDOR_BASE + 11);
-//    static final int RIL_REQUEST_USIM_AUTHENTICATION  = (RIL_REQUEST_VENDOR_BASE + 27);
+    static final int RIL_REQUEST_DUAL_SIM_MODE_SWITCH  = (RIL_REQUEST_VENDOR_BASE + 11);
+    static final int RIL_REQUEST_USIM_AUTHENTICATION  = (RIL_REQUEST_VENDOR_BASE + 27);
     static final int RIL_REQUEST_MODEM_POWERON = (RIL_REQUEST_VENDOR_BASE + 28);
     static final int RIL_REQUEST_RESUME_REGISTRATION  = (RIL_REQUEST_VENDOR_BASE + 65);
-//    static final int RIL_REQUEST_SIM_INTERFACE_SWITCH  = (RIL_REQUEST_VENDOR_BASE + 68);
+    static final int RIL_REQUEST_SIM_INTERFACE_SWITCH  = (RIL_REQUEST_VENDOR_BASE + 68);
     static final int RIL_REQUEST_SET_CALL_INDICATION = (RIL_REQUEST_VENDOR_BASE + 86);
     static final int RIL_REQUEST_EMERGENCY_DIAL = (RIL_REQUEST_VENDOR_BASE + 87);
     static final int RIL_REQUEST_SET_ECC_SERVICE_CATEGORY = (RIL_REQUEST_VENDOR_BASE + 88);
@@ -142,8 +142,8 @@ public class RIL extends BaseCommands implements CommandsInterface {
     static final int RIL_UNSOL_CALL_INFO_INDICATION = (RIL_UNSOL_VENDOR_BASE + 49);
     static final int RIL_UNSOL_MD_STATE_CHANGE = (RIL_UNSOL_VENDOR_BASE + 53);
     static final int RIL_UNSOL_SET_ATTACH_APN = (RIL_UNSOL_VENDOR_BASE + 73);
-//    static final int RIL_UNSOL_MAL_AT_INFO = (RIL_UNSOL_VENDOR_BASE + 74);
-//    static final int RIL_UNSOL_MAIN_SIM_INFO = (RIL_UNSOL_VENDOR_BASE + 75);
+    static final int RIL_UNSOL_MAL_AT_INFO = (RIL_UNSOL_VENDOR_BASE + 74);
+    static final int RIL_UNSOL_MAIN_SIM_INFO = (RIL_UNSOL_VENDOR_BASE + 75);
 
     /**
      * Wake lock timeout should be longer than the longest timeout in
@@ -4634,18 +4634,30 @@ public class RIL extends BaseCommands implements CommandsInterface {
                 return "RIL_REQUEST_STOP_NETWORK_SCAN";
             case RIL_REQUEST_RESUME_REGISTRATION:
                 return "RIL_REQUEST_RESUME_REGISTRATION";
-	    case RIL_REQUEST_SET_CALL_INDICATION:
+	        case RIL_REQUEST_SET_CALL_INDICATION:
                  return "RIL_REQUEST_SET_CALL_INDICATION";
-	    case RIL_REQUEST_EMERGENCY_DIAL:
-	         return "RIL_REQUEST_EMERGENCY_DIAL";
-	    case RIL_REQUEST_SET_ECC_SERVICE_CATEGORY:
-	         return "RIL_REQUEST_SET_ECC_SERVICE_CATEGORY";
-	    case RIL_REQUEST_SET_ECC_LIST:
+	        case RIL_REQUEST_EMERGENCY_DIAL:
+	             return "RIL_REQUEST_EMERGENCY_DIAL";
+	        case RIL_REQUEST_SET_ECC_SERVICE_CATEGORY:
+	             return "RIL_REQUEST_SET_ECC_SERVICE_CATEGORY";
+	        case RIL_REQUEST_SET_ECC_LIST:
                  return "RIL_REQUEST_SET_ECC_LIST";
             case RIL_REQUEST_MODEM_POWEROFF:
-           	 return "RIL_REQUEST_MODEM_POWEROFF";
-	    case RIL_REQUEST_MODEM_POWERON:
+           	     return "RIL_REQUEST_MODEM_POWEROFF";
+	        case RIL_REQUEST_MODEM_POWERON:
                  return "RIL_REQUEST_MODEM_POWERON";
+	        case RIL_REQUEST_SWITCH_CARD_TYPE:
+                 return "RIL_REQUEST_SWITCH_CARD_TYPE";
+	        case RIL_REQUEST_DUAL_SIM_MODE_SWITCH:
+                 return "RIL_REQUEST_DUAL_SIM_MODE_SWITCH";
+	        case RIL_REQUEST_USIM_AUTHENTICATION:
+                 return "RIL_REQUEST_USIM_AUTHENTICATION";
+	        case RIL_REQUEST_SIM_INTERFACE_SWITCH:
+                 return "RIL_REQUEST_SIM_INTERFACE_SWITCH";
+	        case RIL_REQUEST_GENERAL_SIM_AUTH:
+                 return "RIL_REQUEST_GENERAL_SIM_AUTH";
+	        case RIL_REQUEST_QUERY_AVAILABLE_NETWORK_WITH_ACT:
+                 return "RIL_REQUEST_QUERY_AVAILABLE_NETWORK_WITH_ACT";				 
             default: return "<unknown request>";
         }
     }
@@ -4750,18 +4762,24 @@ public class RIL extends BaseCommands implements CommandsInterface {
                 return "RIL_UNSOL_CARRIER_INFO_IMSI_ENCRYPTION";
             case RIL_UNSOL_NETWORK_SCAN_RESULT:
                 return "RIL_UNSOL_NETWORK_SCAN_RESULT";
-	    case RIL_UNSOL_RESPONSE_REGISTRATION_SUSPENDED:
-	        return "RIL_UNSOL_RESPONSE_REGISTRATION_SUSPENDED";
-	    case RIL_UNSOL_INCOMING_CALL_INDICATION:
+	        case RIL_UNSOL_RESPONSE_REGISTRATION_SUSPENDED:
+	            return "RIL_UNSOL_RESPONSE_REGISTRATION_SUSPENDED";
+	        case RIL_UNSOL_INCOMING_CALL_INDICATION:
                 return "RIL_UNSOL_INCOMING_CALL_INDICATION";
-	    case RIL_UNSOL_CALL_INFO_INDICATION:
-	         return "RIL_UNSOL_CALL_PROGRESS";
-	    case RIL_UNSOL_MD_STATE_CHANGE:
-		 return "RIL_UNSOL_MD_STATE_CHANGE";
-	    case RIL_UNSOL_SET_ATTACH_APN:
-                 return "RIL_UNSOL_SET_ATTACH_APN";
-	    case RIL_UNSOL_RESPONSE_PS_NETWORK_STATE_CHANGED:
-                 return "RIL_UNSOL_RESPONSE_PS_NETWORK_STATE_CHANGED";
+	        case RIL_UNSOL_CALL_INFO_INDICATION:
+	            return "RIL_UNSOL_CALL_INFO_INDICATION";
+	        case RIL_UNSOL_CALL_PROGRESS:
+	            return "RIL_UNSOL_CALL_PROGRESS";
+	        case RIL_UNSOL_MD_STATE_CHANGE:
+		        return "RIL_UNSOL_MD_STATE_CHANGE";
+	        case RIL_UNSOL_SET_ATTACH_APN:
+                return "RIL_UNSOL_SET_ATTACH_APN";
+	        case RIL_UNSOL_RESPONSE_PS_NETWORK_STATE_CHANGED:
+                return "RIL_UNSOL_RESPONSE_PS_NETWORK_STATE_CHANGED";
+	        case RIL_UNSOL_MAL_AT_INFO:
+                return "RIL_UNSOL_MAL_AT_INFO";
+	        case RIL_UNSOL_MAIN_SIM_INFO:
+                return "RIL_UNSOL_MAIN_SIM_INFO";
             default:
                 return "<unknown response>";
         }
