@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2013 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,10 @@ import com.android.internal.util.HexDump;
 
 import java.util.Arrays;
 import java.util.Date;
+
+// MTK-START
+import android.telephony.SubscriptionManager;
+// MTK-END
 
 /**
  * Tracker for an incoming SMS message ready to broadcast to listeners.
@@ -63,6 +72,17 @@ public final class InboundSmsTracker {
     /** Destination port mask (16-bit unsigned value on GSM and CDMA). */
     private static final int DEST_PORT_MASK = 0xffff;
 
+    // MTK-START
+    /** Field for subscription */
+    private int mSubId;
+
+    /** Receiving time */
+    private long mRecvTime;
+
+    /** upload flag for CT requirement */
+    private int mUploadFlag;
+    // MTK-END
+
     /**
      * Create a tracker for a single-part SMS.
      * @param pdu the message PDU
@@ -73,6 +93,26 @@ public final class InboundSmsTracker {
      */
     InboundSmsTracker(byte[] pdu, long timestamp, int destPort, boolean is3gpp2,
             boolean is3gpp2WapPdu) {
+        // MTK-START
+        this(SubscriptionManager.getDefaultSmsSubId(), pdu, timestamp, destPort,
+                  is3gpp2, is3gpp2WapPdu);
+        // MTK-END
+    }
+
+    // MTK-START
+    /**
+     * Create a tracker for a single-part SMS.
+     *
+     * @param subId the subscription identity
+     * @param pdu the message PDU
+     * @param timestamp the message timestamp
+     * @param destPort the destination port
+     * @param is3gpp2 true for 3GPP2 format; false for 3GPP format
+     * @param is3gpp2WapPdu true for 3GPP2 format WAP PDU; false otherwise
+     */
+    InboundSmsTracker(int subId, byte[] pdu, long timestamp, int destPort,
+            boolean is3gpp2, boolean is3gpp2WapPdu) {
+        mSubId = subId;
         mPdu = pdu;
         mTimestamp = timestamp;
         mDestPort = destPort;
@@ -84,6 +124,7 @@ public final class InboundSmsTracker {
         mSequenceNumber = getIndexOffset();     // 0 or 1, depending on type
         mMessageCount = 1;
     }
+    // MTK-END
 
     /**
      * Create a tracker for a multi-part SMS. Sequence numbers start at 1 for 3GPP and regular
@@ -105,6 +146,35 @@ public final class InboundSmsTracker {
     public InboundSmsTracker(byte[] pdu, long timestamp, int destPort, boolean is3gpp2,
             String address, int referenceNumber, int sequenceNumber, int messageCount,
             boolean is3gpp2WapPdu) {
+        // MTK-START
+        this(SubscriptionManager.getDefaultSmsSubId(), pdu, timestamp, destPort, is3gpp2, address,
+                referenceNumber, sequenceNumber, messageCount, is3gpp2WapPdu);
+        // MTK-END
+    }
+
+    // MTK-START
+    /**
+     * Create a tracker for a multi-part SMS. Sequence numbers start at 1 for 3GPP and regular
+     * concatenated 3GPP2 messages, but CDMA WAP push sequence numbers start at 0. The caller
+     * will subtract 1 if necessary so that the sequence number is always 0-based. When loading
+     * and saving to the raw table, the sequence number is adjusted if necessary for backwards
+     * compatibility.
+     *
+     * @param subId the subscription identity
+     * @param pdu the message PDU
+     * @param timestamp the message timestamp
+     * @param destPort the destination port
+     * @param is3gpp2 true for 3GPP2 format; false for 3GPP format
+     * @param address the originating address
+     * @param referenceNumber the concatenated reference number
+     * @param sequenceNumber the sequence number of this segment (0-based)
+     * @param messageCount the total number of segments
+     * @param is3gpp2WapPdu true for 3GPP2 format WAP PDU; false otherwise
+     */
+    public InboundSmsTracker(int subId, byte[] pdu, long timestamp, int destPort,
+            boolean is3gpp2, String address, int referenceNumber, int sequenceNumber,
+            int messageCount, boolean is3gpp2WapPdu) {
+        mSubId = subId;
         mPdu = pdu;
         mTimestamp = timestamp;
         mDestPort = destPort;
@@ -116,6 +186,7 @@ public final class InboundSmsTracker {
         mSequenceNumber = sequenceNumber;
         mMessageCount = messageCount;
     }
+    // MTK-END
 
     /**
      * Create a new tracker from the row of the raw table pointed to by Cursor.
@@ -143,6 +214,9 @@ public final class InboundSmsTracker {
         }
 
         mTimestamp = cursor.getLong(InboundSmsHandler.DATE_COLUMN);
+        // MTK-START
+        mSubId = cursor.getInt(InboundSmsHandler.SUB_ID_COLUMN);
+        // MTK-END
 
         if (cursor.isNull(InboundSmsHandler.COUNT_COLUMN)) {
             // single-part message
@@ -169,8 +243,11 @@ public final class InboundSmsTracker {
             }
 
             mDeleteWhere = InboundSmsHandler.SELECT_BY_REFERENCE;
+            // MTK-START
             mDeleteWhereArgs = new String[]{mAddress,
-                    Integer.toString(mReferenceNumber), Integer.toString(mMessageCount)};
+                    Integer.toString(mReferenceNumber), Integer.toString(mMessageCount),
+                    Integer.toString(mSubId)};
+            // MTK-END
         }
     }
 
@@ -201,6 +278,12 @@ public final class InboundSmsTracker {
             values.put("sequence", mSequenceNumber);
             values.put("count", mMessageCount);
         }
+
+        // MTK-START
+        values.put("sub_id", mSubId);
+        values.put("recv_time", mRecvTime);
+        values.put("upload_flag", mUploadFlag);
+        // MTK-END
         return values;
     }
 
@@ -209,7 +292,9 @@ public final class InboundSmsTracker {
      * @param destPort the destination port value, with flags
      * @return the real destination port, or -1 for no port
      */
-    static int getRealDestPort(int destPort) {
+    // MTK-START, used by ConcatenatedSmsFwkExt and make it as public
+    static public int getRealDestPort(int destPort) {
+    // MTK-END
         if ((destPort & DEST_PORT_FLAG_NO_PORT) != 0) {
             return -1;
         } else {
@@ -263,6 +348,12 @@ public final class InboundSmsTracker {
         return mIs3gpp2;
     }
 
+    // MTK-START
+    boolean is3gpp2WapPdu() {
+        return mIs3gpp2WapPdu;
+    }
+    // MTK-END
+
     String getFormat() {
         return mIs3gpp2 ? SmsConstants.FORMAT_3GPP2 : SmsConstants.FORMAT_3GPP;
     }
@@ -299,4 +390,10 @@ public final class InboundSmsTracker {
     String[] getDeleteWhereArgs() {
         return mDeleteWhereArgs;
     }
+
+    // MTK-START
+    int getSubId() {
+        return mSubId;
+    }
+    // MTK-END
 }

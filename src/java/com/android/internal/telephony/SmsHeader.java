@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,7 +33,9 @@ import java.util.ArrayList;
  * SMS user data header, as specified in TS 23.040 9.2.3.24.
  */
 public class SmsHeader {
-
+    // MTK-START
+    private static final String TAG = "SmsHeader";
+    // MTK-END
     // TODO(cleanup): this data structure is generally referred to as
     // the 'user data header' or UDH, and so the class name should
     // change to reflect this...
@@ -71,6 +78,12 @@ public class SmsHeader {
     public static final int PORT_WAP_PUSH = 2948;
     public static final int PORT_WAP_WSP  = 9200;
 
+    // MTK-START
+    public static final int CONCATENATED_8_BIT_REFERENCE_LENGTH = 5;
+    public static final int NATIONAL_LANGUAGE_SINGLE_SHIFT_LENGTH = 3;
+    public static final int NATIONAL_LANGUAGE_LOCKING_SHIFT_LENGTH = 3;
+    // MTK-END
+
     public static class PortAddrs {
         public int destPort;
         public int origPort;
@@ -88,6 +101,15 @@ public class SmsHeader {
         public int msgIndType;
         public int msgCount;
     }
+
+    // MTK-START
+    public static class NationalLanguageShift {
+        public int singleShiftId = 0;
+        public int lockingShiftId = 0;
+    }
+
+    public NationalLanguageShift nationalLang;
+    // MTK-END
 
     /**
      * A header element that is not explicitly parsed, meaning not
@@ -202,6 +224,9 @@ public class SmsHeader {
         if ((smsHeader.portAddrs == null) &&
             (smsHeader.concatRef == null) &&
             (smsHeader.specialSmsMsgList.isEmpty()) &&
+            // MTK-START
+            (smsHeader.nationalLang == null) &&
+            // MTK-END
             (smsHeader.miscEltList.isEmpty()) &&
             (smsHeader.languageShiftTable == 0) &&
             (smsHeader.languageTable == 0)) {
@@ -311,4 +336,195 @@ public class SmsHeader {
         return builder.toString();
     }
 
+    // MTK-START
+     /**
+     * Create a header for specified destination Port
+     * @param destPort, a specified application port
+     * @param ret byte[] containing the encoding header with destPort
+     */
+    public static byte[] getSubmitPduHeader(int destPort) {
+        return getSubmitPduHeader(destPort, 0, 0, 0);
+    }
+
+    /**
+     * Create a header for specified destination Port
+     *
+     * @param destPort, a specified application port
+     * @param originalPort, a specified application original port
+     * @param ret byte[] containing the encoding header with destPort
+     */
+    public static byte[] getSubmitPduHeader(int destPort, int originalPort) {
+        return getSubmitPduHeader(destPort, originalPort, 0, 0, 0);
+    }
+
+    /**
+     * Create a header for concatenated message
+     *
+     * @param destPort, a specified application port
+     * @param ret byte[] containing the encoding header with destPort
+     */
+    public static byte[] getSubmitPduHeader(
+            int refNumber, int seqNumber, int msgCount) {
+        return getSubmitPduHeader(-1, refNumber, seqNumber, msgCount);
+    }
+
+    /**
+     * Create a header for specified destination Port and concatenated message
+     *
+     * @param destPort, a specified application port
+     * @param refNumber paramters for concatenated Message
+     * @param seqNumber paramters for concatenated Message
+     * @param msgCount paramters for concatenated Message
+     * @param ret byte[] containing the encoding header with destPort and
+     *            concatenatedMsgTag
+     */
+    public static byte[] getSubmitPduHeader(int destPort,
+            int refNumber, int seqNumber, int msgCount) {
+        return getSubmitPduHeaderWithLang(destPort, refNumber, seqNumber, msgCount, -1, -1);
+    }
+
+    /**
+     * Create a header for specified destination Port and concatenated message
+     *
+     * @param destPort, a specified application port
+     * @param originalPort, a specified application original port
+     * @param refNumber paramters for concatenated Message
+     * @param seqNumber paramters for concatenated Message
+     * @param msgCount paramters for concatenated Message
+     * @param ret byte[] containing the encoding header with destPort and
+     *            concatenatedMsgTag
+     */
+    public static byte[] getSubmitPduHeader(int destPort, int originalPort,
+            int refNumber, int seqNumber, int msgCount) {
+        return getSubmitPduHeaderWithLang(destPort, originalPort, refNumber, seqNumber, msgCount,
+                -1, -1);
+    }
+
+    /**
+     * Create a header with language table
+     *
+     * @param ret byte[] containing the encoding header with destPort
+     */
+    public static byte[] getSubmitPduHeaderWithLang(int destPort, int singleShiftId,
+            int lockingShiftId) {
+        return getSubmitPduHeaderWithLang(destPort, 0, 0, 0, singleShiftId, lockingShiftId);
+    }
+
+    /**
+     * Create a header for concatenated message with language
+     *
+     * @param ret byte[] containing the encoding header with destPort
+     */
+    public static byte[] getSubmitPduHeaderWithLang(
+            int refNumber, int seqNumber, int msgCount,
+            int singleShiftId, int lockingShiftId) {
+        return getSubmitPduHeaderWithLang(
+                -1, refNumber, seqNumber, msgCount, singleShiftId, lockingShiftId);
+    }
+
+     /**
+     * Create a header for specified destination Port,
+     * concatenated message, and shift tables
+     * @param destPort, a specified application port
+     * @param refNumber paramters for concatenated Message
+     * @param seqNumber paramters for concatenated Message
+     * @param msgCount paramters for concatenated Message
+     * @param singleShiftId paramters for singleShift table ID
+     * @param lockingShiftId paramters for lockingShift table ID
+     * @param ret byte[] containing the encoding header with destPort and
+     *            concatenatedMsgTag
+     */
+    public static byte[] getSubmitPduHeaderWithLang(int destPort,
+            int refNumber, int seqNumber, int msgCount,
+            int singleShiftId, int lockingShiftId) {
+        SmsHeader smsHeader = new SmsHeader();
+
+        if (destPort >= 0) {
+            SmsHeader.PortAddrs portAddrs = new SmsHeader.PortAddrs();
+            portAddrs.destPort = destPort;
+            portAddrs.origPort = 0;
+            portAddrs.areEightBits = false;
+
+            smsHeader.portAddrs = portAddrs;
+        }
+
+        if (msgCount > 0) {
+            SmsHeader.ConcatRef concatRef = new SmsHeader.ConcatRef();
+            concatRef.refNumber = refNumber;
+            concatRef.seqNumber = seqNumber; // 1-based sequence
+            concatRef.msgCount = msgCount;
+
+            // TODO: We currently set this to true since our messaging app will never
+            // send more than 255 parts (it converts the message to MMS well before that).
+            // However, we should support 3rd party messaging apps that might need 16-bit
+            // references
+            // Note:  It's not sufficient to just flip this bit to true; it will have
+            // ripple effects (several calculations assume 8-bit ref).
+            concatRef.isEightBits = true;
+
+            smsHeader.concatRef = concatRef;
+        }
+
+        if (singleShiftId > 0 || lockingShiftId > 0) {
+            smsHeader.nationalLang = new SmsHeader.NationalLanguageShift();
+            smsHeader.nationalLang.singleShiftId = singleShiftId;
+            smsHeader.nationalLang.lockingShiftId = lockingShiftId;
+        }
+
+        return SmsHeader.toByteArray(smsHeader);
+    }
+
+    /**
+     * Create a header for specified destination Port,
+     * concatenated message, and shift tables
+     * @param destPort, a specified application port
+     * @param originalPort, a specified application original port
+     * @param refNumber paramters for concatenated Message
+     * @param seqNumber paramters for concatenated Message
+     * @param msgCount paramters for concatenated Message
+     * @param singleShiftId paramters for singleShift table ID
+     * @param lockingShiftId paramters for lockingShift table ID
+     * @param ret byte[] containing the encoding header with destPort and
+     *            concatenatedMsgTag
+     */
+    public static byte[] getSubmitPduHeaderWithLang(int destPort, int originalPort,
+            int refNumber, int seqNumber, int msgCount,
+            int singleShiftId, int lockingShiftId) {
+        SmsHeader smsHeader = new SmsHeader();
+
+        if (destPort >= 0) {
+            SmsHeader.PortAddrs portAddrs = new SmsHeader.PortAddrs();
+            portAddrs.destPort = destPort;
+            portAddrs.origPort = originalPort;
+            portAddrs.areEightBits = false;
+
+            smsHeader.portAddrs = portAddrs;
+        }
+
+        if (msgCount > 0) {
+            SmsHeader.ConcatRef concatRef = new SmsHeader.ConcatRef();
+            concatRef.refNumber = refNumber;
+            concatRef.seqNumber = seqNumber; // 1-based sequence
+            concatRef.msgCount = msgCount;
+
+            // TODO: We currently set this to true since our messaging app will never
+            // send more than 255 parts (it converts the message to MMS well before that).
+            // However, we should support 3rd party messaging apps that might need 16-bit
+            // references
+            // Note:  It's not sufficient to just flip this bit to true; it will have
+            // ripple effects (several calculations assume 8-bit ref).
+            concatRef.isEightBits = true;
+
+            smsHeader.concatRef = concatRef;
+        }
+
+        if (singleShiftId > 0 || lockingShiftId > 0) {
+            smsHeader.nationalLang = new SmsHeader.NationalLanguageShift();
+            smsHeader.nationalLang.singleShiftId = singleShiftId;
+            smsHeader.nationalLang.lockingShiftId = lockingShiftId;
+        }
+
+        return SmsHeader.toByteArray(smsHeader);
+    }
+    // MTK-END
 }

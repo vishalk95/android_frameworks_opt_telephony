@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2011 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +23,10 @@ package com.android.internal.telephony;
 
 import java.util.ArrayList;
 import java.util.Iterator;
+
+// MTK-START
+import android.telephony.Rlog;
+// MTK-END
 
 /**
  * Clients can enable reception of SMS-CB messages for specific ranges of
@@ -642,6 +651,17 @@ public abstract class IntRangeManager {
             }
         }
     }
+
+    // MTK-START
+    /**
+     * Clear all the saved ranges
+     * @hide
+     */
+    public void clearAllRanges() {
+        Rlog.d("IntRangeManager", "clear all the ranges");
+        mRanges.clear();
+    }
+    // MTK-END
 
     /**
      * Called when the list of enabled ranges has changed. This will be

@@ -393,7 +393,8 @@ abstract class SipPhoneBase extends PhoneBase {
     }
 
     @Override
-    public void selectNetworkManually(OperatorInfo network, boolean persistSelection,
+    public void selectNetworkManually(
+            OperatorInfo network,
             Message response) {
     }
 

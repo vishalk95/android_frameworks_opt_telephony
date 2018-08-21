@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2013 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +53,7 @@ public class SmsBroadcastUndelivered implements Runnable {
      * Query projection for dispatching pending messages at boot time.
      * Column order must match the {@code *_COLUMN} constants in {@link InboundSmsHandler}.
      */
+    // MTK-START
     private static final String[] PDU_PENDING_MESSAGE_PROJECTION = {
             "pdu",
             "sequence",
@@ -56,8 +62,10 @@ public class SmsBroadcastUndelivered implements Runnable {
             "reference_number",
             "count",
             "address",
-            "_id"
+            "_id",
+            "sub_id"
     };
+    // MTK-END
 
     /** URI for raw table from SmsProvider. */
     private static final Uri sRawUri = Uri.withAppendedPath(Telephony.Sms.CONTENT_URI, "raw");
@@ -71,11 +79,19 @@ public class SmsBroadcastUndelivered implements Runnable {
     /** Handler for 3GPP2-format messages (may be null). */
     private final CdmaInboundSmsHandler mCdmaInboundSmsHandler;
 
+    // MTK-START
+    private final PhoneBase mPhone;
+    // MTK-END
+
+    // MTK-START
+    // Pass phone instacne to get the sub id
     public SmsBroadcastUndelivered(Context context, GsmInboundSmsHandler gsmInboundSmsHandler,
-            CdmaInboundSmsHandler cdmaInboundSmsHandler) {
+            CdmaInboundSmsHandler cdmaInboundSmsHandler, PhoneBase phone) {
+    // MTK-END
         mResolver = context.getContentResolver();
         mGsmInboundSmsHandler = gsmInboundSmsHandler;
         mCdmaInboundSmsHandler = cdmaInboundSmsHandler;
+        mPhone = phone;
     }
 
     @Override
@@ -119,7 +135,13 @@ public class SmsBroadcastUndelivered implements Runnable {
 
                 if (tracker.getMessageCount() == 1) {
                     // deliver single-part message
-                    broadcastSms(tracker);
+                    // MTK-START
+                    // Check the Sub id if the same
+                    if (tracker.getSubId() == mPhone.getSubId()) {
+                        if (DBG) Rlog.d(TAG, "New sms on raw table, subId: " + tracker.getSubId());
+                        broadcastSms(tracker);
+                    }
+                    // MTK-END
                 } else {
                     SmsReferenceKey reference = new SmsReferenceKey(tracker);
                     Integer receivedCount = multiPartReceivedCount.get(reference);
@@ -136,7 +158,14 @@ public class SmsBroadcastUndelivered implements Runnable {
                             // looks like we've got all the pieces; send a single tracker
                             // to state machine which will find the other pieces to broadcast
                             if (DBG) Rlog.d(TAG, "found complete multi-part message");
-                            broadcastSms(tracker);
+                            // MTK-START
+                            // Check the Sub id if the same
+                            if (tracker.getSubId() == mPhone.getSubId()) {
+                                if (DBG) Rlog.d(TAG, "New sms on raw table, subId: " +
+                                        tracker.getSubId());
+                                broadcastSms(tracker);
+                            }
+                            // MTK-END
                             // don't delete this old message until after we broadcast it
                             oldMultiPartMessages.remove(reference);
                         } else {
@@ -191,30 +220,44 @@ public class SmsBroadcastUndelivered implements Runnable {
         final String mAddress;
         final int mReferenceNumber;
         final int mMessageCount;
+        // MTK-START
+        final long mSubId;
+        // MTK-END
 
         SmsReferenceKey(InboundSmsTracker tracker) {
             mAddress = tracker.getAddress();
             mReferenceNumber = tracker.getReferenceNumber();
             mMessageCount = tracker.getMessageCount();
+            // MTK-START
+            mSubId = tracker.getSubId();
+            // MTK-END
         }
 
         String[] getDeleteWhereArgs() {
+            // MTK-START
             return new String[]{mAddress, Integer.toString(mReferenceNumber),
-                    Integer.toString(mMessageCount)};
+                    Integer.toString(mMessageCount), Long.toString(mSubId)};
+            // MTK-END
         }
 
         @Override
         public int hashCode() {
-            return ((mReferenceNumber * 31) + mMessageCount) * 31 + mAddress.hashCode();
+            // MTK-START
+            return ((((int) mSubId * 63) + mReferenceNumber * 31) + mMessageCount) * 31 +
+                    mAddress.hashCode();
+            // MTK-END
         }
 
         @Override
         public boolean equals(Object o) {
             if (o instanceof SmsReferenceKey) {
                 SmsReferenceKey other = (SmsReferenceKey) o;
+                // MTK-START
                 return other.mAddress.equals(mAddress)
                         && (other.mReferenceNumber == mReferenceNumber)
-                        && (other.mMessageCount == mMessageCount);
+                        && (other.mMessageCount == mMessageCount)
+                        && (other.mSubId == mSubId);
+                // MTK-END
             }
             return false;
         }

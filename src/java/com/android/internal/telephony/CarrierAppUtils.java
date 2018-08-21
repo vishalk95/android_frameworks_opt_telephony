@@ -21,18 +21,13 @@ import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.os.RemoteException;
-import android.os.SystemProperties;
 import android.telephony.TelephonyManager;
 import android.util.Slog;
 
 import com.android.internal.annotations.VisibleForTesting;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Utilities for handling carrier applications.
@@ -42,15 +37,6 @@ public final class CarrierAppUtils {
     private static final String TAG = "CarrierAppUtils";
 
     private static final boolean DEBUG = false; // STOPSHIP if true
-
-    public static enum CARRIER {
-        TELEPHONY_CARRIER_ONE
-    }
-
-    private static final Map<String, CARRIER> mCarriersMap = Collections.unmodifiableMap
-      (new HashMap<String, CARRIER>() {{
-        put("405854", CARRIER.TELEPHONY_CARRIER_ONE);
-    }});
 
     private CarrierAppUtils() {}
 
@@ -66,10 +52,6 @@ public final class CarrierAppUtils {
      * in the default state (e.g. not explicitly DISABLED/DISABLED_BY_USER/ENABLED), or we enable if
      * the app is carrier privileged and in either the default state or DISABLED_UNTIL_USED.
      *
-     * In addition, a list of permanently enabled carrier apps is packaged with the system and read
-     * here. All permanently enabled carrier apps are treated the same as the SIM enabled carrier
-     * apps here.
-     *
      * When enabling a carrier app we also grant it default permissions.
      *
      * This method is idempotent and is safe to be called at any time; it should be called once at
@@ -83,26 +65,19 @@ public final class CarrierAppUtils {
         }
         String[] systemCarrierAppsDisabledUntilUsed = Resources.getSystem().getStringArray(
                 com.android.internal.R.array.config_disabledUntilUsedPreinstalledCarrierApps);
-        String[] systemCarrierAppsEnabled = Resources.getSystem().getStringArray(
-                com.android.internal.R.array.config_enabledPreinstalledCarrierApps);
         disableCarrierAppsUntilPrivileged(callingPackage, packageManager, telephonyManager, userId,
-                systemCarrierAppsDisabledUntilUsed, systemCarrierAppsEnabled);
+                systemCarrierAppsDisabledUntilUsed);
     }
 
     // Must be public b/c framework unit tests can't access package-private methods.
     @VisibleForTesting
     public static void disableCarrierAppsUntilPrivileged(String callingPackage,
             IPackageManager packageManager, TelephonyManager telephonyManager, int userId,
-            String[] systemCarrierAppsDisabledUntilUsed, String[] systemCarrierAppsEnabled) {
+            String[] systemCarrierAppsDisabledUntilUsed) {
         List<ApplicationInfo> candidates = getDefaultCarrierAppCandidatesHelper(packageManager,
-                userId, systemCarrierAppsDisabledUntilUsed, systemCarrierAppsEnabled);
+                userId, systemCarrierAppsDisabledUntilUsed);
         if (candidates == null || candidates.isEmpty()) {
             return;
-        }
-
-        HashSet<String> enabledCarrierAppsSet = new HashSet<>(systemCarrierAppsEnabled.length);
-        for (String packageName : systemCarrierAppsEnabled) {
-            enabledCarrierAppsSet.add(packageName);
         }
 
         List<String> enabledCarrierPackages = new ArrayList<>();
@@ -110,12 +85,6 @@ public final class CarrierAppUtils {
         try {
             for (ApplicationInfo ai : candidates) {
                 String packageName = ai.packageName;
-
-                // Enabled carrier apps are already enabled, so continue
-                if (enabledCarrierAppsSet.contains(ai.packageName)) {
-                    continue;
-                }
-
                 boolean hasPrivileges =
                         telephonyManager.checkCarrierPrivilegesForPackageAnyPhone(packageName) ==
                                 TelephonyManager.CARRIER_PRIVILEGE_STATUS_HAS_ACCESS;
@@ -149,11 +118,6 @@ public final class CarrierAppUtils {
                 }
             }
 
-            // Add all permanently enabled packages to the enabled list
-            for (String enabledPackageName : systemCarrierAppsEnabled) {
-                enabledCarrierPackages.add(enabledPackageName);
-            }
-
             if (!enabledCarrierPackages.isEmpty()) {
                 // Since we enabled at least one app, ensure we grant default permissions to those
                 // apps.
@@ -171,8 +135,7 @@ public final class CarrierAppUtils {
      *
      * This is the subset of apps returned by
      * {@link #getDefaultCarrierAppCandidates(IPackageManager, int)} which currently have carrier
-     * privileges per the SIM(s) inserted in the device. All permanent system enabled carrier
-     * apps are always included in the returned list.
+     * privileges per the SIM(s) inserted in the device.
      */
     public static List<ApplicationInfo> getDefaultCarrierApps(IPackageManager packageManager,
             TelephonyManager telephonyManager, int userId) {
@@ -180,13 +143,6 @@ public final class CarrierAppUtils {
         List<ApplicationInfo> candidates = getDefaultCarrierAppCandidates(packageManager, userId);
         if (candidates == null || candidates.isEmpty()) {
             return null;
-        }
-
-        String[] systemCarrierAppsEnabled = Resources.getSystem().getStringArray(
-                com.android.internal.R.array.config_enabledPreinstalledCarrierApps);
-        HashSet<String> enabledCarrierAppsSet = new HashSet<>(systemCarrierAppsEnabled.length);
-        for (String packageName : systemCarrierAppsEnabled) {
-            enabledCarrierAppsSet.add(packageName);
         }
 
         // Filter out apps without carrier privileges.
@@ -198,7 +154,7 @@ public final class CarrierAppUtils {
             boolean hasPrivileges =
                     telephonyManager.checkCarrierPrivilegesForPackageAnyPhone(packageName) ==
                             TelephonyManager.CARRIER_PRIVILEGE_STATUS_HAS_ACCESS;
-            if (!hasPrivileges && !enabledCarrierAppsSet.contains(packageName)) {
+            if (!hasPrivileges) {
                 candidates.remove(i);
             }
         }
@@ -212,8 +168,7 @@ public final class CarrierAppUtils {
      * These are the apps subject to the hiding/showing logic in
      * {@link CarrierAppUtils#disableCarrierAppsUntilPrivileged(String, IPackageManager,
      * TelephonyManager, int)}, as well as the apps which should have default permissions granted,
-     * when a matching SIM is inserted. Additionally, all permanently enabled system carrier
-     * apps are included in the returned list.
+     * when a matching SIM is inserted.
      *
      * Whether or not the app is actually considered a default app depends on whether the app has
      * carrier privileges as determined by the SIMs in the device.
@@ -222,26 +177,20 @@ public final class CarrierAppUtils {
             IPackageManager packageManager, int userId) {
         String[] systemCarrierAppsDisabledUntilUsed = Resources.getSystem().getStringArray(
                 com.android.internal.R.array.config_disabledUntilUsedPreinstalledCarrierApps);
-        String[] systemCarrierAppsEnabled = Resources.getSystem().getStringArray(
-                com.android.internal.R.array.config_enabledPreinstalledCarrierApps);
         return getDefaultCarrierAppCandidatesHelper(packageManager, userId,
-                systemCarrierAppsDisabledUntilUsed, systemCarrierAppsEnabled);
+                systemCarrierAppsDisabledUntilUsed);
     }
 
     private static List<ApplicationInfo> getDefaultCarrierAppCandidatesHelper(
             IPackageManager packageManager, int userId,
-            String[] systemCarrierAppsDisabledUntilUsed,
-            String[] systemCarrierAppsEnabled) {
-        if ((systemCarrierAppsDisabledUntilUsed == null
-                || systemCarrierAppsDisabledUntilUsed.length == 0)
-            && (systemCarrierAppsEnabled == null
-                || systemCarrierAppsEnabled.length == 0)) {
+            String[] systemCarrierAppsDisabledUntilUsed) {
+        if (systemCarrierAppsDisabledUntilUsed == null
+                || systemCarrierAppsDisabledUntilUsed.length == 0) {
             return null;
         }
         List<ApplicationInfo> apps = null;
         try {
-            apps = new ArrayList<>(systemCarrierAppsDisabledUntilUsed.length
-                    + systemCarrierAppsEnabled.length);
+            apps = new ArrayList<>(systemCarrierAppsDisabledUntilUsed.length);
             for (String packageName : systemCarrierAppsDisabledUntilUsed) {
                 ApplicationInfo ai = packageManager.getApplicationInfo(packageName,
                         PackageManager.GET_DISABLED_UNTIL_USED_COMPONENTS, userId);
@@ -254,25 +203,9 @@ public final class CarrierAppUtils {
                 }
                 apps.add(ai);
             }
-
-            for (String carrierApp : systemCarrierAppsEnabled) {
-                ApplicationInfo ai = packageManager.getApplicationInfo(carrierApp, 0, userId);
-                if (ai != null) {
-                    apps.add(ai);
-                }
-            }
         } catch (RemoteException e) {
             Slog.w(TAG, "Could not reach PackageManager", e);
         }
         return apps;
-    }
-
-    public static CARRIER getCarrierId() {
-        String property = SystemProperties.get("persist.radio.atel.carrier");
-        if (mCarriersMap.containsKey(property)) {
-            return mCarriersMap.get(property);
-        } else {
-            return null;
-        }
     }
 }

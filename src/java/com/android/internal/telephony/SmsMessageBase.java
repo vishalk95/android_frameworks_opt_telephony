@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2008 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +30,11 @@ import java.util.Arrays;
 import android.provider.Telephony;
 import android.telephony.SmsMessage;
 
+// MTK-START
+import com.android.internal.telephony.GsmAlphabet.TextEncodingDetails;
+import static com.android.internal.telephony.SmsConstants.ENCODING_UNKNOWN;
+// MTK-END
+
 /**
  * Base class declaring the specific methods and members for SmsMessage.
  * {@hide}
@@ -35,9 +45,6 @@ public abstract class SmsMessageBase {
 
     /** {@hide} The address of the sender */
     protected SmsAddress mOriginatingAddress;
-
-    /** {@hide} The address of the receiver */
-    protected SmsAddress mRecipientAddress;
 
     /** {@hide} The message body as a string. May be null if the message isn't text */
     protected String mMessageBody;
@@ -90,11 +97,33 @@ public abstract class SmsMessageBase {
     /** TP-Message-Reference - Message Reference of sent message. @hide */
     public int mMessageRef;
 
-    // TODO(): This class is duplicated in SmsMessage.java. Refactor accordingly.
-    public static abstract class SubmitPduBase  {
+    // MTK-START
+    /** {@hide} The address of the receiver */
+    protected SmsAddress destinationAddress;
+
+    /** {@hide} */
+    protected int relativeValidityPeriod;
+    /** {@hide} */
+    protected int absoluteValidityPeriod;
+
+    /** {@hide} */
+    protected int mwiType = -1;
+    /** {@hide} */
+    protected int mwiCount = 0;
+    // MTK-END
+
+    // MTK-START
+    // base class of submit/deliver pdu
+    public static abstract class PduBase {
         public byte[] encodedScAddress; // Null if not applicable.
         public byte[] encodedMessage;
 
+        abstract public String toString();
+    }
+    // MTK-END
+
+    // TODO(): This class is duplicated in SmsMessage.java. Refactor accordingly.
+    public static abstract class SubmitPduBase extends PduBase  {
         @Override
         public String toString() {
             return "SubmitPdu: encodedScAddress = "
@@ -103,6 +132,18 @@ public abstract class SmsMessageBase {
                     + Arrays.toString(encodedMessage);
         }
     }
+
+    // MTK-START
+    public static abstract class DeliverPduBase extends PduBase {
+        @Override
+        public String toString() {
+            return "DeliverPdu: encodedScAddress = "
+                    + Arrays.toString(encodedScAddress)
+                    + ", encodedMessage = "
+                    + Arrays.toString(encodedMessage);
+        }
+    }
+    // MTK-END
 
     /**
      * Returns the address of the SMS service center that relayed this message
@@ -320,9 +361,12 @@ public abstract class SmsMessageBase {
     protected void parseMessageBody() {
         // originatingAddress could be null if this message is from a status
         // report.
-        if (mOriginatingAddress != null && mOriginatingAddress.couldBeEmailGateway()) {
+        // MTK-START
+        if (mOriginatingAddress != null && mOriginatingAddress.couldBeEmailGateway() &&
+                !isReplace()) {
             extractEmailAddressFromMessageBody();
         }
+        // MTK-END
     }
 
     /**
@@ -352,10 +396,6 @@ public abstract class SmsMessageBase {
          mIsEmail = Telephony.Mms.isEmailAddress(mEmailFrom);
     }
 
-    //Returns true if the given code point is regional indicator symbol
-    private static boolean isRegionalIndicatorSymbol(int codepoint) {
-        return (0x1F1E6 <= codepoint && codepoint <= 0x1F1FF);
-    }
     /**
      * Find the next position to start a new fragment of a multipart SMS.
      *
@@ -374,22 +414,7 @@ public abstract class SmsMessageBase {
             BreakIterator breakIterator = BreakIterator.getCharacterInstance();
             breakIterator.setText(msgBody.toString());
             if (!breakIterator.isBoundary(nextPos)) {
-                int breakPos = breakIterator.preceding(nextPos);
-                while (breakPos + 4 <= nextPos
-                    && isRegionalIndicatorSymbol(
-                     Character.codePointAt(msgBody, breakPos))
-                    && isRegionalIndicatorSymbol(
-                     Character.codePointAt(msgBody, breakPos + 2))) {
-                   // skip forward over flags (pairs of Regional Indicator Symbol)
-                   breakPos += 4;
-                }
-                if (breakPos > currentPosition) {
-                    nextPos = breakPos;
-                } else if (Character.isHighSurrogate(msgBody.charAt(nextPos - 1))) {
-                  // no character boundary in this fragment, try to at least land on a code point
-                    nextPos -= 1;
-                }
-
+                nextPos = breakIterator.preceding(nextPos);
             }
         }
         return nextPos;
@@ -437,17 +462,43 @@ public abstract class SmsMessageBase {
 
         return ted;
     }
-
+    // MTK-START
     /**
-     * {@hide}
-     * Returns the receiver address of this SMS message in String
+     * Returns the destination address (receiver) of this SMS message in String
      * form or null if unavailable
      */
-    public String getRecipientAddress() {
-        if (mRecipientAddress == null) {
+    public String getDestinationAddress() {
+        if (destinationAddress == null) {
             return null;
         }
 
-        return mRecipientAddress.getAddressString();
+        return destinationAddress.getAddressString();
     }
+
+    /**
+     * Calculate the number of septets needed to encode the message.
+     *
+     * @param msgBody the message to encode
+     * @param use7bitOnly ignore (but still count) illegal characters if true
+     * @param encodingType text encoding type(7-bit, 16-bit or automatic)
+     * @return TextEncodingDetails
+     */
+    public static TextEncodingDetails calculateLength(CharSequence msgBody,
+            boolean use7bitOnly, int encodingType) {
+        return null;
+    }
+
+    /**
+     * Get the current encoding type, ex. 7 bit or UCS2.
+     * App can use the encoding type to check if all Google emoticons content. It has bug while
+     * the emoticons codec cross 2 segments, it will have the broken content and shows to end user.
+     * Therefore, app can check if the encoding type is equal to 16bit. If it is equal to 16 bit,
+     * app is able to merge all content and display as correct emoticons.
+     *
+     * @return ENCODING_UNKNOWN, ENCODING_7BIT, ENCODING_8BIT or ENCODING_16BIT
+     */
+    public int getEncodingType() {
+        return ENCODING_UNKNOWN;
+    }
+    // MTK-END
 }

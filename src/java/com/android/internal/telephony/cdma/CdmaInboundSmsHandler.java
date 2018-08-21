@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2013 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +23,9 @@ package com.android.internal.telephony.cdma;
 
 import android.app.Activity;
 import android.content.Context;
+// MTK-START
+import android.content.Intent;
+// MTK-END
 import android.content.res.Resources;
 import android.os.Message;
 import android.os.SystemProperties;
@@ -29,14 +37,26 @@ import com.android.internal.telephony.CommandsInterface;
 import com.android.internal.telephony.InboundSmsHandler;
 import com.android.internal.telephony.InboundSmsTracker;
 import com.android.internal.telephony.PhoneBase;
+// MTK-START
+import com.android.internal.telephony.PhoneConstants;
+// MTK-END
 import com.android.internal.telephony.SmsConstants;
 import com.android.internal.telephony.SmsMessageBase;
 import com.android.internal.telephony.SmsStorageMonitor;
 import com.android.internal.telephony.TelephonyProperties;
 import com.android.internal.telephony.WspTypeDecoder;
 import com.android.internal.telephony.cdma.sms.SmsEnvelope;
+// MTK-START
+import com.android.internal.util.BitwiseInputStream;
+import com.mediatek.internal.telephony.uicc.IccFileAdapter;
+// MTK-END
 
 import java.util.Arrays;
+
+// MTK-START
+import com.mediatek.common.MPlugin;
+import com.mediatek.common.sms.IInboundAutoRegSmsFwkExt;
+// MTK-END
 
 /**
  * Subclass of {@link InboundSmsHandler} for 3GPP2 type messages.
@@ -48,6 +68,14 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
 
     private byte[] mLastDispatchedSmsFingerprint;
     private byte[] mLastAcknowledgedSmsFingerprint;
+
+    // MTK-START: add for OMH
+    private IccFileAdapter mIccFileAdapter = null;
+    // MTK-END
+
+    // MTK-START: Handle special teleservice
+    private IInboundAutoRegSmsFwkExt mInboundAutoRegSmsFwkExt = null;
+    // MTK-END
 
     private final boolean mCheckForDuplicatePortsInOmadmWapPush = Resources.getSystem().getBoolean(
             com.android.internal.R.bool.config_duplicate_port_omadm_wappush);
@@ -63,6 +91,17 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
         mServiceCategoryProgramHandler = CdmaServiceCategoryProgramHandler.makeScpHandler(context,
                 phone.mCi);
         phone.mCi.setOnNewCdmaSms(getHandler(), EVENT_NEW_SMS, null);
+
+        // MTK-START
+        mInboundAutoRegSmsFwkExt = MPlugin.createInstance(IInboundAutoRegSmsFwkExt.class.getName());
+        if (mInboundAutoRegSmsFwkExt == null) {
+            log("Create mInboundAutoRegSmsFwkExt fail.");
+        }
+        // MTK-END
+
+        // MTK-START: add for OMH
+        mIccFileAdapter = new IccFileAdapter(context, phone);
+        // MTK-END
     }
 
     /**
@@ -89,6 +128,15 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
     }
 
     /**
+     * Return whether the device is in Emergency Call Mode (only for 3GPP2).
+     * @return true if the device is in ECM; false otherwise
+     */
+    private static boolean isInEmergencyCallMode() {
+        String inEcm = SystemProperties.get(TelephonyProperties.PROPERTY_INECM_MODE, "false");
+        return "true".equals(inEcm);
+    }
+
+    /**
      * Return true if this handler is for 3GPP2 messages; false for 3GPP format.
      * @return true (3GPP2)
      */
@@ -104,6 +152,10 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
      */
     @Override
     protected int dispatchMessageRadioSpecific(SmsMessageBase smsb) {
+        if (isInEmergencyCallMode()) {
+            return Activity.RESULT_OK;
+        }
+
         SmsMessage sms = (SmsMessage) smsb;
         boolean isBroadcastType = (SmsEnvelope.MESSAGE_TYPE_BROADCAST == sms.getMessageType());
 
@@ -112,6 +164,17 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
             log("Broadcast type message");
             SmsCbMessage cbMessage = sms.parseBroadcastSms();
             if (cbMessage != null) {
+                // MTK-START: add for OMH. In OMH, RUIM defines the filtering criteria
+                // that can be used by the Mobile Equipment (ME) to receive Broadcast SMS.
+                // (See 3gpp2 spec C.S0023-D_v1.0_R-UIM, 3.4.57)
+                if (mIccFileAdapter != null && mIccFileAdapter.isOmhCard()) {
+                    int check = mIccFileAdapter.getBcsmsCfgFromRuim(
+                            cbMessage.getServiceCategory(), cbMessage.getMessagePriority());
+                    if (check == 0) {
+                        return Intents.RESULT_SMS_HANDLED;
+                    }
+                }
+                // MTK-END
                 mCellBroadcastHandler.dispatchSmsMessage(cbMessage);
             } else {
                 loge("error trying to parse broadcast SMS");
@@ -153,12 +216,18 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
                 // handled below, after storage check
                 break;
 
-            case SmsEnvelope.TELESERVICE_CT_WAP:
-                // handled below, after TELESERVICE_WAP
-                break;
-
             default:
                 loge("unsupported teleservice 0x" + Integer.toHexString(teleService));
+                // MTK-START
+                if (mInboundAutoRegSmsFwkExt != null) {
+                    boolean result = mInboundAutoRegSmsFwkExt.handleAutoRegMessage(mContext,
+                            teleService, sms.getPdu(), mPhone.getSubId());
+                    if (result) {
+                        log("handled auto register sms.");
+                        return Intents.RESULT_SMS_HANDLED;
+                    }
+                }
+                // MTK-END
                 return Intents.RESULT_SMS_UNSUPPORTED;
         }
 
@@ -171,14 +240,6 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
         }
 
         if (SmsEnvelope.TELESERVICE_WAP == teleService) {
-            return processCdmaWapPdu(sms.getUserData(), sms.mMessageRef,
-                    sms.getOriginatingAddress(), sms.getTimestampMillis());
-        } else if (SmsEnvelope.TELESERVICE_CT_WAP == teleService) {
-            /* China Telecom WDP header contains Message identifier
-               and User data subparametrs extract these fields */
-            if (!sms.processCdmaCTWdpHeader(sms)) {
-                return Intents.RESULT_SMS_HANDLED;
-            }
             return processCdmaWapPdu(sms.getUserData(), sms.mMessageRef,
                     sms.getOriginatingAddress(), sms.getTimestampMillis());
         }
@@ -194,6 +255,10 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
      */
     @Override
     protected void acknowledgeLastIncomingSms(boolean success, int result, Message response) {
+        if (isInEmergencyCallMode()) {
+            return;
+        }
+
         int causeCode = resultToCause(result);
         mPhone.mCi.acknowledgeLastIncomingCdmaSms(success, causeCode, response);
 

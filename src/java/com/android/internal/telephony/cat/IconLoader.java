@@ -17,9 +17,11 @@
 package com.android.internal.telephony.cat;
 
 import com.android.internal.telephony.uicc.IccFileHandler;
+import com.android.internal.util.HexDump;
 
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.telephony.TelephonyManager;
 import android.os.AsyncResult;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -33,6 +35,7 @@ import java.util.HashMap;
  *
  */
 class IconLoader extends Handler {
+    private static final String TAG = "Stk-IL";
     // members
     private int mState = STATE_SINGLE_ICON;
     private ImageDescriptor mId = null;
@@ -46,9 +49,11 @@ class IconLoader extends Handler {
     private int mCurrentRecordIndex = 0;
     private Bitmap[] mIcons = null;
     private HashMap<Integer, Bitmap> mIconsCache = null;
+    private int mSlotId;
 
     private static IconLoader sLoader = null;
-    private static HandlerThread sThread = null;
+    private static HandlerThread[] sThread = null;
+    private static int sSimCount = 0;
 
     // Loader state values.
     private static final int STATE_SINGLE_ICON = 1;
@@ -67,21 +72,34 @@ class IconLoader extends Handler {
     private static final int CLUT_ENTRY_SIZE = 3;
 
 
-    private IconLoader(Looper looper , IccFileHandler fh) {
+    private IconLoader(Looper looper , IccFileHandler fh, int slotId) {
         super(looper);
         mSimFH = fh;
-
+        mSlotId = slotId;
         mIconsCache = new HashMap<Integer, Bitmap>(50);
     }
 
-    static IconLoader getInstance(Handler caller, IccFileHandler fh) {
+    static IconLoader getInstance(Handler caller, IccFileHandler fh, int slotId) {
         if (sLoader != null) {
             return sLoader;
         }
+        if (null == sThread) {
+            sSimCount = TelephonyManager.getDefault().getSimCount();
+            sThread = new HandlerThread[sSimCount];
+            for (int i = 0; i < sSimCount; i++) {
+                sThread[i] = null;
+            }
+        }
         if (fh != null) {
-            sThread = new HandlerThread("Cat Icon Loader");
-            sThread.start();
-            return new IconLoader(sThread.getLooper(), fh);
+            if (null == sThread[slotId]) {
+                sThread[slotId] = new HandlerThread("Cat Icon Loader");
+                sThread[slotId].start();
+            }
+            if (null != sThread[slotId].getLooper()) {
+                return new IconLoader(sThread[slotId].getLooper(), fh, slotId);
+            } else {
+                return null;
+            }
         }
         return null;
     }
@@ -109,6 +127,7 @@ class IconLoader extends Handler {
     }
 
     private void startLoadingIcon(int recordNumber) {
+        CatLog.d(TAG, "call startLoadingIcon");
         // Reset the load variables.
         mId = null;
         mIconData = null;
@@ -117,23 +136,34 @@ class IconLoader extends Handler {
 
         // make sure the icon was not already loaded and saved in the local cache.
         if (mIconsCache.containsKey(recordNumber)) {
+            CatLog.d(TAG, "mIconsCache contains record " + recordNumber);
             mCurrentIcon = mIconsCache.get(recordNumber);
             postIcon();
             return;
         }
 
         // start the first phase ==> loading Image Descriptor.
+        CatLog.d(TAG, "to load icon from EFimg");
         readId();
     }
 
     @Override
     public void handleMessage(Message msg) {
         AsyncResult ar;
+        byte[] rawData = null;
 
         try {
             switch (msg.what) {
             case EVENT_READ_EF_IMG_RECOED_DONE:
+                CatLog.d(TAG, "load EFimg done");
+                if (msg.obj == null) {
+                    CatLog.e(TAG, "msg.obj is null.");
+                    break;
+                }
+                CatLog.d(TAG, "msg.obj is " + msg.obj.getClass().getName());
                 ar = (AsyncResult) msg.obj;
+                rawData = ((byte[]) ar.result);
+                CatLog.d(TAG, "EFimg raw data: " + HexDump.toHexString(rawData));
                 if (handleImageDescriptor((byte[]) ar.result)) {
                     readIconData();
                 } else {
@@ -141,9 +171,11 @@ class IconLoader extends Handler {
                 }
                 break;
             case EVENT_READ_ICON_DONE:
-                CatLog.d(this, "load icon done");
+                CatLog.d(TAG, "load icon done");
                 ar = (AsyncResult) msg.obj;
-                byte[] rawData = ((byte[]) ar.result);
+                rawData = ((byte[]) ar.result);
+                CatLog.d(TAG, "icon raw data: " + HexDump.toHexString(rawData));
+                CatLog.d(TAG, "load icon CODING_SCHEME = " + mId.mCodingScheme);
                 if (mId.mCodingScheme == ImageDescriptor.CODING_SCHEME_BASIC) {
                     mCurrentIcon = parseToBnW(rawData, rawData.length);
                     mIconsCache.put(mRecordNumber, mCurrentIcon);
@@ -152,11 +184,12 @@ class IconLoader extends Handler {
                     mIconData = rawData;
                     readClut();
                 } else {
-                    CatLog.d(this, "else  /postIcon ");
+                    CatLog.d(TAG, "else  /postIcon ");
                     postIcon();
                 }
                 break;
             case EVENT_READ_CLUT_DONE:
+                    CatLog.d(TAG, "load clut done");
                 ar = (AsyncResult) msg.obj;
                 byte [] clut = ((byte[]) ar.result);
                 mCurrentIcon = parseToRGB(mIconData, mIconData.length,
@@ -167,6 +200,7 @@ class IconLoader extends Handler {
             }
         } catch (Exception e) {
             CatLog.d(this, "Icon load failed");
+            e.printStackTrace();
             // post null icon back to the caller.
             postIcon();
         }
@@ -180,10 +214,13 @@ class IconLoader extends Handler {
      * TS 51.011.
      */
     private boolean handleImageDescriptor(byte[] rawData) {
+        CatLog.d(TAG, "call handleImageDescriptor");
         mId = ImageDescriptor.parse(rawData, 1);
         if (mId == null) {
+            CatLog.d(TAG, "fail to parse image raw data");
             return false;
         }
+        CatLog.d(TAG, "success to parse image raw data");
         return true;
     }
 
@@ -198,6 +235,7 @@ class IconLoader extends Handler {
 
     // Start reading Image Descriptor from SIM card.
     private void readId() {
+        CatLog.d(TAG, "call readId");
         if (mRecordNumber < 0) {
             mCurrentIcon = null;
             postIcon();
@@ -209,6 +247,7 @@ class IconLoader extends Handler {
 
     // Start reading icon bytes array from SIM card.
     private void readIconData() {
+        CatLog.d(TAG, "call readIconData");
         Message msg = obtainMessage(EVENT_READ_ICON_DONE);
         mSimFH.loadEFImgTransparent(mId.mImageId, 0, 0, mId.mLength ,msg);
     }
@@ -363,11 +402,24 @@ class IconLoader extends Handler {
         return mask;
     }
     public void dispose() {
+        int i;
         mSimFH = null;
-        if (sThread != null) {
-            sThread.quit();
-            sThread = null;
+
+        if (sThread[mSlotId] != null) {
+            sThread[mSlotId].quit();
+            sThread[mSlotId] = null;
         }
+        // Check if all sThread[] is null
+        for (i = 0 ; i < sSimCount ; i++) {
+              if (null != sThread[i]) {
+                  break;
+              }
+        }
+        // All sThread[] has been null, set sThread as null
+        if (i == sSimCount) {
+              sThread = null;
+        }
+
         mIconsCache = null;
         sLoader = null;
     }

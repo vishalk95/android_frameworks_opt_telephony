@@ -19,7 +19,6 @@ package com.android.internal.telephony.dataconnection;
 import android.net.NetworkRequest;
 import android.os.Message;
 import android.telephony.Rlog;
-import android.telephony.SubscriptionManager;
 import android.util.LocalLog;
 
 import com.android.internal.util.AsyncChannel;
@@ -47,9 +46,11 @@ public class DcSwitchAsyncChannel extends AsyncChannel {
     static final int EVENT_DATA_DETACHED =            BASE + 8;
     static final int EVENT_EMERGENCY_CALL_STARTED =   BASE + 9;
     static final int EVENT_EMERGENCY_CALL_ENDED =     BASE + 10;
-    static final int EVENT_RESET =                    BASE + 11;
+    static final int REQ_CONFIRM_PREDETACH =          BASE + 11;
+    static final int REQ_DC_SWITCH_STATE =            BASE + 12;
+    static final int RSP_DC_SWITCH_STATE =            BASE + 13;
 
-    private static final int CMD_TO_STRING_COUNT = EVENT_RESET - BASE + 1;
+    private static final int CMD_TO_STRING_COUNT = RSP_DC_SWITCH_STATE - BASE + 1;
     private static String[] sCmdToString = new String[CMD_TO_STRING_COUNT];
     static {
         sCmdToString[REQ_CONNECT - BASE] = "REQ_CONNECT";
@@ -63,20 +64,30 @@ public class DcSwitchAsyncChannel extends AsyncChannel {
         sCmdToString[EVENT_DATA_DETACHED - BASE] = "EVENT_DATA_DETACHED";
         sCmdToString[EVENT_EMERGENCY_CALL_STARTED - BASE] = "EVENT_EMERGENCY_CALL_STARTED";
         sCmdToString[EVENT_EMERGENCY_CALL_ENDED - BASE] = "EVENT_EMERGENCY_CALL_ENDED";
-        sCmdToString[EVENT_RESET - BASE] = "EVENT_RESET";
+        sCmdToString[REQ_CONFIRM_PREDETACH - BASE] = "REQ_CONFIRM_PREDETACH";
+        sCmdToString[REQ_DC_SWITCH_STATE - BASE] = "REQ_DC_SWITCH_STATE";
+        sCmdToString[RSP_DC_SWITCH_STATE - BASE] = "RSP_DC_SWITCH_STATE";
     }
 
-    public static class RequestInfo {
-        public final NetworkRequest request;
-        public final int priority;
-        public int executedPhoneId;
+   public static class RequestInfo {
+        boolean executed;
+        final NetworkRequest request;
+        final int priority;
+        final int phoneId;
         private final LocalLog requestLog;
 
-        public RequestInfo(NetworkRequest request, int priority, LocalLog l) {
+        //MTK START
+        int mGId;
+        //MTK END
+
+        public RequestInfo(NetworkRequest request, int priority, LocalLog l, int phoneId,
+                int gid) {
             this.request = request;
             this.priority = priority;
             this.requestLog = l;
-            this.executedPhoneId = SubscriptionManager.INVALID_PHONE_INDEX;
+            this.executed = false;
+            this.phoneId = phoneId;
+            this.mGId = gid;
         }
 
         public void log(String str) {
@@ -89,18 +100,9 @@ public class DcSwitchAsyncChannel extends AsyncChannel {
 
         @Override
         public String toString() {
-            return "[ request=" + request + ", executedPhoneId=" + executedPhoneId +
-                ", priority=" + priority + "]";
-        }
-    }
-
-    public static class ConnectInfo {
-        final RequestInfo request;
-        final Message responseMessage;
-
-        public ConnectInfo(RequestInfo req, Message msg) {
-            this.request = req;
-            this.responseMessage = msg;
+            return "[ request=" + request + ", executed=" + executed +
+                ", gid=" + mGId +
+                ", priority=" + priority + ", phoneId=" + phoneId + "]";
         }
     }
 
@@ -119,14 +121,7 @@ public class DcSwitchAsyncChannel extends AsyncChannel {
     }
 
     public int connect(RequestInfo apnRequest) {
-        ConnectInfo connectInfo = new ConnectInfo(apnRequest, null);
-        sendMessage(REQ_CONNECT, connectInfo);
-        return PhoneConstants.APN_REQUEST_STARTED;
-    }
-
-    public int connect(RequestInfo apnRequest, Message msg) {
-        ConnectInfo connectInfo = new ConnectInfo(apnRequest, msg);
-        sendMessage(REQ_CONNECT, connectInfo);
+        sendMessage(REQ_CONNECT, apnRequest);
         return PhoneConstants.APN_REQUEST_STARTED;
     }
 
@@ -153,11 +148,6 @@ public class DcSwitchAsyncChannel extends AsyncChannel {
         } else {
             sendMessage(EVENT_EMERGENCY_CALL_ENDED);
         }
-    }
-
-    public void reset() {
-        sendMessage(EVENT_RESET);
-        if (DBG) log("EVENT_RESET");
     }
 
     private boolean rspIsIdle(Message response) {
@@ -194,6 +184,34 @@ public class DcSwitchAsyncChannel extends AsyncChannel {
         } else {
             if (DBG) log("rspIsIdleOrDetaching error response=" + response);
             return false;
+        }
+    }
+
+    public int confirmPreDetach() {
+        sendMessage(REQ_CONFIRM_PREDETACH);
+        return PhoneConstants.APN_REQUEST_STARTED;
+    }
+
+    private String rspDcSwitchStateSync(Message response) {
+        String retVal = "";
+        if (response.obj != null) {
+            retVal = (String) response.obj;
+        }
+        if (DBG) {
+            log("rspConnect=" + retVal);
+        }
+        return retVal;
+    }
+
+    public String requestDcSwitchStateSync() {
+        Message response = sendMessageSynchronously(REQ_DC_SWITCH_STATE);
+        if ((response != null) && (response.what == RSP_DC_SWITCH_STATE)) {
+            return rspDcSwitchStateSync(response);
+        } else {
+            if (DBG) {
+                log("requestDcSwitchStateSync error response=" + response);
+            }
+            return "";
         }
     }
 

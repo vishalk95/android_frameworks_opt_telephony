@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,25 +24,34 @@ package com.android.internal.telephony.gsm;
 import android.content.Context;
 import android.content.res.Resources;
 import com.android.internal.telephony.*;
+/// M: SS Ut part
+import com.android.internal.telephony.SSRequestDecisionMaker;
 import com.android.internal.telephony.uicc.IccRecords;
 import com.android.internal.telephony.uicc.UiccCardApplication;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppState;
 
 import android.os.*;
 import android.telephony.PhoneNumberUtils;
+/* M: SS part */
+import android.telephony.TelephonyManager;
+/* M: SS part end */
 import android.text.SpannableStringBuilder;
 import android.text.BidiFormatter;
 import android.text.TextDirectionHeuristics;
 import android.text.TextUtils;
 import android.telephony.Rlog;
-import android.util.Log;
-import android.widget.Toast;
 
 import static com.android.internal.telephony.CommandsInterface.*;
+import static com.android.internal.telephony.TelephonyProperties.PROPERTY_UT_CFU_NOTIFICATION_MODE;
+import static com.android.internal.telephony.TelephonyProperties.UT_CFU_NOTIFICATION_MODE_DISABLED;
+import static com.android.internal.telephony.TelephonyProperties.UT_CFU_NOTIFICATION_MODE_OFF;
+import static com.android.internal.telephony.TelephonyProperties.UT_CFU_NOTIFICATION_MODE_ON;
+
 import com.android.internal.telephony.gsm.SsData;
 
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
+
 
 /**
  * The motto for this file is:
@@ -105,7 +119,8 @@ public final class GsmMmiCode extends Handler implements MmiCode {
     static final String SC_PUK          = "05";
     static final String SC_PUK2         = "052";
 
-    static final int SINGLE_DIGIT_DIALED =    1;
+    ///M:For query CNAP
+    static final String SC_CNAP         = "300";
 
     //***** Event Constants
 
@@ -117,12 +132,37 @@ public final class GsmMmiCode extends Handler implements MmiCode {
     static final int EVENT_SET_CFF_COMPLETE     = 6;
     static final int EVENT_USSD_CANCEL_COMPLETE = 7;
 
+    /* M: SS part */
+    /// M: [mtk04070][111125][ALPS00093395]MTK added. @{
+    static final String PROPERTY_RIL_SIM_PIN1 =  "gsm.sim.retry.pin1";
+    static final String PROPERTY_RIL_SIM_PUK1 =  "gsm.sim.retry.puk1";
+    static final String PROPERTY_RIL_SIM_PIN2 =  "gsm.sim.retry.pin2";
+    static final String PROPERTY_RIL_SIM_PUK2 =  "gsm.sim.retry.puk2";
+    static final String PROPERTY_RIL_SIM2_PIN1 =  "gsm.sim.retry.pin1.2";
+    static final String PROPERTY_RIL_SIM2_PUK1 =  "gsm.sim.retry.puk1.2";
+    static final String PROPERTY_RIL_SIM2_PIN2 =  "gsm.sim.retry.pin2.2";
+    static final String PROPERTY_RIL_SIM2_PUK2 =  "gsm.sim.retry.puk2.2";
+    static final String RETRY_BLOCKED = "0";
+    //Connected line presentation //mtk00732
+    static final String SC_COLP    = "76";
+    static final String SC_COLR    = "77";
+    // mtk00732 add for COLP and COLR
+    static final int EVENT_GET_COLR_COMPLETE    = 8;
+    static final int EVENT_GET_COLP_COMPLETE    = 9;
+    static final String USSD_HANDLED_BY_STK = "stk";
+    /// @}
+    /* M: SS part end */
+
     //***** Instance Variables
 
     GSMPhone mPhone;
     Context mContext;
     UiccCardApplication mUiccApplication;
     IccRecords mIccRecords;
+    /// M: SS Ut part @{
+    private int mPhoneId;
+    private SSRequestDecisionMaker mSSReqDecisionMaker;
+    /// @}
 
     String mAction;              // One of ACTION_*
     String mSc;                  // Service Code
@@ -141,6 +181,10 @@ public final class GsmMmiCode extends Handler implements MmiCode {
     CharSequence mMessage;
     private boolean mIsSsInfo = false;
 
+    //For ALPS01471897
+    private boolean mUserInitiatedMMI = false;
+    //end
+    private int mOrigUtCfuMode = 0;
 
     //***** Class Variables
 
@@ -187,8 +231,10 @@ public final class GsmMmiCode extends Handler implements MmiCode {
      *
      * Please see flow chart in TS 22.030 6.5.3.2
      */
-
-    static GsmMmiCode
+    /// M: CC022: Error message due to VoLTE SS checking @{
+    // Declare as public for TelephonyConnectionServiceUtil to use
+    public static GsmMmiCode
+    /// @}
     newFromDialString(String dialString, GSMPhone phone, UiccCardApplication app) {
         Matcher m;
         GsmMmiCode ret = null;
@@ -217,6 +263,18 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 ret = new GsmMmiCode(phone, app);
                 ret.mPoundString = dialString;
             }
+
+            /* M: SS part end */
+            /// M: [mtk04070][111125][ALPS00093395]MTK added log.
+            Rlog.d(LOG_TAG, "poundString:" + ret.mPoundString + "\n"
+                          + "action:" + ret.mAction + "\n"
+                          + "sc:" + ret.mSc + "\n"
+                          + "sia:" + ret.mSia + "\n"
+                          + "sib:" + ret.mSib + "\n"
+                          + "sic:" + ret.mSic + "\n"
+                          + "pwd:" + ret.mPwd + "\n"
+                          + "dialingNumber:" + ret.mDialingNumber + "\n");
+            /* M: SS part end */
         } else if (dialString.endsWith("#")) {
             // TS 22.030 sec 6.5.3.2
             // "Entry of any characters defined in the 3GPP TS 23.038 [8] Default Alphabet
@@ -311,11 +369,13 @@ public final class GsmMmiCode extends Handler implements MmiCode {
 
                     Rlog.d(LOG_TAG, "setVoiceCallForwardingFlag cffEnabled: " + cffEnabled);
                     if (mIccRecords != null) {
-                        mPhone.setVoiceCallForwardingFlag(1, cffEnabled, null);
+                        mIccRecords.setVoiceCallForwardingFlag(1, cffEnabled, null);
                         Rlog.d(LOG_TAG, "setVoiceCallForwardingFlag done from SS Info.");
                     } else {
                         Rlog.e(LOG_TAG, "setVoiceCallForwardingFlag aborted. sim records is null.");
                     }
+                    mPhone.setSystemProperty(PROPERTY_UT_CFU_NOTIFICATION_MODE,
+                            UT_CFU_NOTIFICATION_MODE_DISABLED);
                 }
                 onSetComplete(null, new AsyncResult(null, ssData.cfInfo, ex));
                 break;
@@ -553,6 +613,10 @@ public final class GsmMmiCode extends Handler implements MmiCode {
         if (app != null) {
             mIccRecords = app.getIccRecords();
         }
+        /// M: SS Ut part @{
+        mPhoneId = mPhone.getPhoneId();
+        mSSReqDecisionMaker = mPhone.mSSReqDecisionMaker;
+        /// @}
     }
 
     //***** MmiCode implementation
@@ -574,10 +638,22 @@ public final class GsmMmiCode extends Handler implements MmiCode {
         return ((Phone) mPhone);
     }
 
+    //For ALPS01471897
+    public void setUserInitiatedMMI(boolean userinit)
+    {
+       mUserInitiatedMMI = userinit;
+    }
+
+    public boolean getUserInitiatedMMI() {
+       return mUserInitiatedMMI;
+    }
+
+
     // inherited javadoc suffices
     @Override
     public void
     cancel() {
+        mPhone.mIsNetworkInitiatedUssd = false;
         // Complete or failed cannot be cancelled
         if (mState == State.COMPLETE || mState == State.FAILED) {
             return;
@@ -668,8 +744,11 @@ public final class GsmMmiCode extends Handler implements MmiCode {
         if (dialString.length() == 0) {
             return false;
         }
-
-        if (PhoneNumberUtils.isLocalEmergencyNumber(phone.getContext(), dialString)) {
+        /* M: SS part */
+        /// M: Replace isLocalEmergencyNumber with isEmergencyNumber to reduce dial speed, MTK04070, 2012.01.18.
+        //if (PhoneNumberUtils.isLocalEmergencyNumber(phone.getContext(), dialString)) {
+        if (PhoneNumberUtils.isEmergencyNumber(dialString)) {
+        /* M: SS part end */
             return false;
         } else {
             return isShortCodeUSSD(dialString, phone);
@@ -720,7 +799,10 @@ public final class GsmMmiCode extends Handler implements MmiCode {
      *  In temporary mode, to invoke CLIR for a single call enter:
      *       " # 31 # [called number] SEND "
      */
-    boolean
+    /// M: CC022: Error message due to VoLTE SS checking @{
+    // Declare as public for TelephonyConnectionServiceUtil to use
+    public boolean
+    /// @}
     isTemporaryModeCLIR() {
         return mSc != null && mSc.equals(SC_CLIR) && mDialingNumber != null
                 && (isActivate() || isDeactivate());
@@ -780,6 +862,40 @@ public final class GsmMmiCode extends Handler implements MmiCode {
         return mIsSsInfo;
     }
 
+    public static boolean isUssdNumber(String dialString, GSMPhone dialPhone, UiccCardApplication iccApp) {
+        String newDialString = PhoneNumberUtils.stripSeparators(dialString);
+        String networkPortion = PhoneNumberUtils.extractNetworkPortionAlt(newDialString);
+
+        GsmMmiCode mmi = GsmMmiCode.newFromDialString(networkPortion, dialPhone, iccApp);
+        if (mmi == null || mmi.isTemporaryModeCLIR()) {
+            return false;
+        }
+        else {
+            if (mmi.isShortCode()) {
+                return true;
+            } else if (mmi.mDialingNumber != null) {
+                return true;
+            } else if (mmi.mSc != null
+                    && (mmi.mSc.equals(SC_CNAP)
+                    || mmi.mSc.equals(SC_CLIP)
+                    || mmi.mSc.equals(SC_CLIR)
+                    || mmi.mSc.equals(SC_COLP)
+                    || mmi.mSc.equals(SC_COLR)
+                    || isServiceCodeCallForwarding(mmi.mSc)
+                    || isServiceCodeCallBarring(mmi.mSc)
+                    || mmi.mSc.equals(SC_PWD)
+                    || mmi.mSc.equals(SC_WAIT)
+                    || mmi.isPinPukCommand()
+                    )) {
+                return false;
+            } else if (mmi.mPoundString != null) {
+                return true;
+            }
+            return false;
+        }
+    }
+    /* M: SS part end */
+
     /** Process a MMI code or short code...anything that isn't a dialing number */
     void
     processCode () {
@@ -790,10 +906,63 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 sendUssd(mDialingNumber);
             } else if (mDialingNumber != null) {
                 // We should have no dialing numbers here
-                throw new RuntimeException ("Invalid or Unsupported MMI Code");
+
+                /* M: SS part */
+                /// M: [mtk04070][111125][ALPS00093395]MTK modified. @{
+                Rlog.w(LOG_TAG, "Special USSD Support:" + mPoundString + mDialingNumber);
+                sendUssd(mPoundString + mDialingNumber);
+                //throw new RuntimeException ("Invalid or Unsupported MMI Code");
+                /// @}
+            } else if (mSc != null && mSc.equals(SC_CNAP)) {
+                Rlog.d(LOG_TAG, "is CNAP");
+                if (mPoundString != null) {
+                    sendCNAPSS(mPoundString);
+                }
+                /* M: SS part end */
+
             } else if (mSc != null && mSc.equals(SC_CLIP)) {
                 Rlog.d(LOG_TAG, "is CLIP");
-                if (isInterrogate()) {
+                /* M: SS part  */ /*M: patch back CLIP*/
+                if (isActivate()) {
+                    Rlog.d(LOG_TAG, "is CLIP - isActivate");
+                    /// M: SS Ut part @{
+                    if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED) &&
+                            mPhone.isGsmUtSupport()) {
+                        mSSReqDecisionMaker.setCLIP(1,
+                                obtainMessage(EVENT_SET_COMPLETE, this));
+                        return;
+                    }
+                    /// @}
+                    if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                        mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                    }
+                    mPhone.mCi.setCLIP(true, obtainMessage(EVENT_SET_COMPLETE, this));
+                } else if (isDeactivate()) {
+                    Rlog.d(LOG_TAG, "is CLIP - isDeactivate");
+                    /// M: SS Ut part @{
+                    if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED) &&
+                            mPhone.isGsmUtSupport()) {
+                        mSSReqDecisionMaker.setCLIP(0,
+                                obtainMessage(EVENT_SET_COMPLETE, this));
+                        return;
+                    }
+                    /// @}
+                    if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                        mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                    }
+                    mPhone.mCi.setCLIP(false, obtainMessage(EVENT_SET_COMPLETE, this));
+                } else if (isInterrogate()) {
+                /* M: SS part end */
+                    /// M: SS Ut part @{
+                    if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED) &&
+                            mPhone.isGsmUtSupport()) {
+                        mSSReqDecisionMaker.getCLIP(obtainMessage(EVENT_QUERY_COMPLETE, this));
+                        return;
+                    }
+                    /// @}
+                    if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                        mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                    }
                     mPhone.mCi.queryCLIP(
                             obtainMessage(EVENT_QUERY_COMPLETE, this));
                 } else {
@@ -802,17 +971,113 @@ public final class GsmMmiCode extends Handler implements MmiCode {
             } else if (mSc != null && mSc.equals(SC_CLIR)) {
                 Rlog.d(LOG_TAG, "is CLIR");
                 if (isActivate()) {
+                    if (mPhone.isOpTbClir()) {
+                        mPhone.mCi.setCLIR(CommandsInterface.CLIR_INVOCATION,
+                            obtainMessage(EVENT_SET_COMPLETE, this));
+                        return;
+                    }
+
+                    /// M: SS Ut part @{
+                    if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED) &&
+                            mPhone.isGsmUtSupport()) {
+                        mSSReqDecisionMaker.setCLIR(CommandsInterface.CLIR_INVOCATION,
+                                obtainMessage(EVENT_SET_COMPLETE, this));
+                        return;
+                    }
+                    /// @}
+                    if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                        mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                    }
                     mPhone.mCi.setCLIR(CommandsInterface.CLIR_INVOCATION,
                         obtainMessage(EVENT_SET_COMPLETE, this));
                 } else if (isDeactivate()) {
+                    if (mPhone.isOpTbClir()) {
+                        mPhone.mCi.setCLIR(CommandsInterface.CLIR_SUPPRESSION,
+                            obtainMessage(EVENT_SET_COMPLETE, this));
+                        return;
+                    }
+
+                    /// M: SS Ut part @{
+                    if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED) &&
+                            mPhone.isGsmUtSupport()) {
+                        mSSReqDecisionMaker.setCLIR(CommandsInterface.CLIR_SUPPRESSION,
+                                obtainMessage(EVENT_SET_COMPLETE, this));
+                        return;
+                    }
+                    /// @}
+                    if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                        mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                    }
                     mPhone.mCi.setCLIR(CommandsInterface.CLIR_SUPPRESSION,
                         obtainMessage(EVENT_SET_COMPLETE, this));
                 } else if (isInterrogate()) {
+                    if (mPhone.isOpTbClir()) {
+                        mPhone.mCi.getCLIR(
+                            obtainMessage(EVENT_GET_CLIR_COMPLETE, this));
+                        return;
+                    }
+
+                    /// M: SS Ut part @{
+                    if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED) &&
+                            mPhone.isGsmUtSupport()) {
+                        mSSReqDecisionMaker.getCLIR(obtainMessage(EVENT_GET_CLIR_COMPLETE, this));
+                        return;
+                    }
+                    /// @}
+                    if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                        mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                    }
                     mPhone.mCi.getCLIR(
                         obtainMessage(EVENT_GET_CLIR_COMPLETE, this));
                 } else {
                     throw new RuntimeException ("Invalid or Unsupported MMI Code");
                 }
+
+            /* M: SS part */
+            /// M: [mtk04070][111125][ALPS00093395]MTK added for COLP and COLR. @{
+            } else if (mSc != null && mSc.equals(SC_COLP)) {
+                Rlog.d(LOG_TAG, "is COLP");
+                if (isInterrogate()) {
+                    /// M: SS Ut part @{
+                    if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED) &&
+                            mPhone.isGsmUtSupport()) {
+                        mSSReqDecisionMaker.getCOLP(obtainMessage(EVENT_GET_COLP_COMPLETE, this));
+                        return;
+                    }
+                    /// @}
+                    if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                        mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                    }
+                    mPhone.mCi.getCOLP(obtainMessage(EVENT_GET_COLP_COMPLETE, this));
+                }
+                // SET COLP as *76# or #76# is not supported.
+                //else if (isActivate()) {
+                //    mPhone.mCM.setCOLP(true,obtainMessage(EVENT_SET_COMPLETE, this));
+                //} else if (isDeactivate()) {
+                //    mPhone.mCM.setCOLP(false,obtainMessage(EVENT_SET_COMPLETE, this));
+                //}
+                else {
+                    throw new RuntimeException("Invalid or Unsupported MMI Code");
+                }
+            } else if (mSc != null && mSc.equals(SC_COLR)) {
+                Rlog.d(LOG_TAG, "is COLR");
+                if (isInterrogate()) {
+                    /// M: SS Ut part @{
+                    if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED) &&
+                            mPhone.isGsmUtSupport()) {
+                        mSSReqDecisionMaker.getCOLR(obtainMessage(EVENT_GET_COLR_COMPLETE, this));
+                        return;
+                    }
+                    /// @}
+                    if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                        mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                    }
+                    mPhone.mCi.getCOLR(obtainMessage(EVENT_GET_COLR_COMPLETE, this));
+                } else {
+                    throw new RuntimeException("Invalid or Unsupported MMI Code");
+                }
+            /// @}
+            /* M: SS part end */
             } else if (isServiceCodeCallForwarding(mSc)) {
                 Rlog.d(LOG_TAG, "is CF");
 
@@ -822,6 +1087,17 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 int time = siToTime(mSic);
 
                 if (isInterrogate()) {
+                    /// M: SS Ut part @{
+                    if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED) &&
+                            mPhone.isGsmUtSupport()) {
+                        mSSReqDecisionMaker.queryCallForwardStatus(reason, serviceClass,
+                                dialingNumber, obtainMessage(EVENT_QUERY_CF_COMPLETE, this));
+                        return;
+                    }
+                    /// @}
+                    if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                        mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                    }
                     mPhone.mCi.queryCallForwardStatus(
                             reason, serviceClass,  dialingNumber,
                                 obtainMessage(EVENT_QUERY_CF_COMPLETE, this));
@@ -861,6 +1137,34 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                                 (cfAction == CommandsInterface.CF_ACTION_REGISTRATION)) ? 1 : 0;
 
                     Rlog.d(LOG_TAG, "is CF setCallForward");
+                    if (isSettingUnconditionalVoice == 1) {
+                        mOrigUtCfuMode = 0;
+                        String utCfuMode;
+                        utCfuMode = mPhone.getSystemProperty(PROPERTY_UT_CFU_NOTIFICATION_MODE,
+                                UT_CFU_NOTIFICATION_MODE_DISABLED);
+                        if (UT_CFU_NOTIFICATION_MODE_ON.equals(utCfuMode)) {
+                            mOrigUtCfuMode = 1;
+                        } else if (UT_CFU_NOTIFICATION_MODE_OFF.equals(utCfuMode)) {
+                            mOrigUtCfuMode = 2;
+                        }
+
+                        mPhone.setSystemProperty(PROPERTY_UT_CFU_NOTIFICATION_MODE,
+                                UT_CFU_NOTIFICATION_MODE_DISABLED);
+                    }
+                    /// M: SS Ut part @{
+                    if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED) &&
+                            mPhone.isGsmUtSupport()) {
+                        mSSReqDecisionMaker.setCallForward(cfAction, reason, serviceClass,
+                            dialingNumber, time, obtainMessage(
+                                    EVENT_SET_CFF_COMPLETE,
+                                    isSettingUnconditionalVoice,
+                                    isEnableDesired, this));
+                        return;
+                    }
+                    /// @}
+                    if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                        mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                    }
                     mPhone.mCi.setCallForward(cfAction, reason, serviceClass,
                             dialingNumber, time, obtainMessage(
                                     EVENT_SET_CFF_COMPLETE,
@@ -875,16 +1179,49 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 int serviceClass = siToServiceClass(mSib);
                 String facility = scToBarringFacility(mSc);
 
+                /* M: SS part */
+                /// M: [mtk04070][111125][ALPS00093395]MTK modified. @{
                 if (isInterrogate()) {
+                    if (password == null) {
+                        /// M: SS Ut part @{
+                        if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED) &&
+                                mPhone.isGsmUtSupport()) {
+                            mSSReqDecisionMaker.queryFacilityLock(facility, password,
+                                    serviceClass, obtainMessage(EVENT_QUERY_COMPLETE, this));
+                            return;
+                        }
+                        /// @}
+                        if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                            mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                        }
                     mPhone.mCi.queryFacilityLock(facility, password,
                             serviceClass, obtainMessage(EVENT_QUERY_COMPLETE, this));
+                    } else {
+                        throw new RuntimeException("Invalid or Unsupported MMI Code");
+                    }
                 } else if (isActivate() || isDeactivate()) {
+                    if ((password != null) && (password.length() == 4)) {
+                        /// M: SS Ut part @{
+                        if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED) &&
+                                mPhone.isGsmUtSupport()) {
+                            mSSReqDecisionMaker.setFacilityLock(facility, isActivate(), password,
+                                    serviceClass, obtainMessage(EVENT_SET_COMPLETE, this));
+                            return;
+                        }
+                        /// @}
+                        if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                            mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                        }
                     mPhone.mCi.setFacilityLock(facility, isActivate(), password,
                             serviceClass, obtainMessage(EVENT_SET_COMPLETE, this));
                 } else {
+                        handlePasswordError(com.android.internal.R.string.passwordIncorrect);
+                    }
+                } else {
                     throw new RuntimeException ("Invalid or Unsupported MMI Code");
                 }
-
+                /// @}
+                /* M: SS part end */
             } else if (mSc != null && mSc.equals(SC_PWD)) {
                 // sia = fac
                 // sib = old pwd
@@ -903,13 +1240,33 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                     } else {
                         facility = scToBarringFacility(mSia);
                     }
-                    if (newPwd.equals(mPwd)) {
-                        mPhone.mCi.changeBarringPassword(facility, oldPwd,
-                                newPwd, obtainMessage(EVENT_SET_COMPLETE, this));
+
+                    /* M: SS part */
+                    /// M: Check password in network side. @{
+                    if ((oldPwd != null) && (newPwd != null) && (mPwd != null)) {
+                        if ((mPwd.length() != newPwd.length()) || (oldPwd.length() != 4) || (mPwd.length() != 4)) {
+                             handlePasswordError(com.android.internal.R.string.passwordIncorrect);
+                        } else {
+                            if (mPhone.isDuringImsCall()) {
+                                Message msg = obtainMessage(EVENT_SET_COMPLETE, this);
+                                CommandException ce = new CommandException(
+                                        CommandException.Error.GENERIC_FAILURE);
+                                AsyncResult.forMessage(msg, null, ce);
+                                msg.sendToTarget();
+                            } else {
+                                /* From test spec 51.010-1 31.8.1.2.3,
+                                 * we shall not compare pwd here. Let pwd check in NW side.
+                                 */
+                                mPhone.mCi.changeBarringPassword(facility, oldPwd,
+                                        newPwd, mPwd, obtainMessage(EVENT_SET_COMPLETE, this));
+                            }
+                        }
                     } else {
                         // password mismatch; return error
                         handlePasswordError(com.android.internal.R.string.passwordIncorrect);
                     }
+                    /// @}
+                    /* M: SS part end */
                 } else {
                     throw new RuntimeException ("Invalid or Unsupported MMI Code");
                 }
@@ -917,13 +1274,51 @@ public final class GsmMmiCode extends Handler implements MmiCode {
             } else if (mSc != null && mSc.equals(SC_WAIT)) {
                 // sia = basic service group
                 int serviceClass = siToServiceClass(mSia);
+                int tbcwMode = mPhone.getTbcwMode();
 
                 if (isActivate() || isDeactivate()) {
-                    mPhone.mCi.setCallWaiting(isActivate(), serviceClass,
-                            obtainMessage(EVENT_SET_COMPLETE, this));
+                    if (tbcwMode == GSMPhone.TBCW_OPTBCW_VOLTE_USER) {
+                        mPhone.setTerminalBasedCallWaiting(isActivate(),
+                                obtainMessage(EVENT_SET_COMPLETE, this));
+                    } else if (tbcwMode == GSMPhone.TBCW_OPTBCW_NOT_VOLTE_USER
+                            || tbcwMode == GSMPhone.TBCW_OPTBCW_WITH_CS) {
+                        if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                            mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                        }
+                        mPhone.mCi.setCallWaiting(isActivate(), serviceClass,
+                                obtainMessage(EVENT_SET_COMPLETE,
+                                    isActivate() ? 1 : 0, -1, this));
+                    } else {
+                        if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED)
+                                && mPhone.isGsmUtSupport()) {
+                            mSSReqDecisionMaker.setCallWaiting(isActivate(), serviceClass,
+                                    obtainMessage(EVENT_SET_COMPLETE, this));
+                        } else {
+                            mPhone.mCi.setCallWaiting(isActivate(), serviceClass,
+                                    obtainMessage(EVENT_SET_COMPLETE, this));
+                        }
+                    }
                 } else if (isInterrogate()) {
-                    mPhone.mCi.queryCallWaiting(serviceClass,
-                            obtainMessage(EVENT_QUERY_COMPLETE, this));
+                    if (tbcwMode == GSMPhone.TBCW_OPTBCW_VOLTE_USER) {
+                        mPhone.getTerminalBasedCallWaiting(
+                                obtainMessage(EVENT_QUERY_COMPLETE, this));
+                    } else if (tbcwMode == GSMPhone.TBCW_OPTBCW_NOT_VOLTE_USER
+                            || tbcwMode == GSMPhone.TBCW_OPTBCW_WITH_CS) {
+                        if (mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_ONCE) {
+                            mPhone.setCsFallbackStatus(PhoneConstants.UT_CSFB_PS_PREFERRED);
+                        }
+                        mPhone.mCi.queryCallWaiting(serviceClass,
+                                obtainMessage(EVENT_QUERY_COMPLETE, this));
+                    } else {
+                        if ((mPhone.getCsFallbackStatus() == PhoneConstants.UT_CSFB_PS_PREFERRED)
+                                && mPhone.isGsmUtSupport()) {
+                            mSSReqDecisionMaker.queryCallWaiting(serviceClass,
+                                    obtainMessage(EVENT_QUERY_COMPLETE, this));
+                        } else {
+                            mPhone.mCi.queryCallWaiting(serviceClass,
+                                    obtainMessage(EVENT_QUERY_COMPLETE, this));
+                        }
+                    }
                 } else {
                     throw new RuntimeException ("Invalid or Unsupported MMI Code");
                 }
@@ -932,42 +1327,152 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 // MmiCode should be an abstract or base class and this and
                 // other common variables and code should be promoted.
 
+               /* M: SS part */
+               /// M: [mtk04070][111125][ALPS00093395]MTK modified. @{
+               Rlog.d(LOG_TAG, "is PIN command");
+
                 // sia = old PIN or PUK
                 // sib = new PIN
                 // sic = new PIN
                 String oldPinOrPuk = mSia;
                 String newPinOrPuk = mSib;
-                int pinLen = newPinOrPuk.length();
+                int pinLen = newPinOrPuk != null ? newPinOrPuk.length() : 0;
+
+                // int pinLen = newPin.length();
+                // int oldPinLen = oldPinOrPuk.length();
+                String retryPin1;
+                String retryPin2;
+                String retryPuk1;
+                String retryPuk2;
+
+                int phoneId = mPhone.getPhoneId();
+
+                //Support multi sim design.
+                StringBuilder appendStr = new StringBuilder();
+
+                if (phoneId != 0) {
+                    appendStr.append(".").append(phoneId + 1);
+                }
+
+                retryPin1 = SystemProperties.get("gsm.sim.retry.pin1" + appendStr.toString(),
+                    null);
+                retryPin2 = SystemProperties.get("gsm.sim.retry.pin2" + appendStr.toString(),
+                    null);
+                retryPuk1 = SystemProperties.get("gsm.sim.retry.puk1" + appendStr.toString(),
+                    null);
+                retryPuk2 = SystemProperties.get("gsm.sim.retry.puk2" + appendStr.toString(),
+                    null);
+
+                //retryPin1 = TelephonyManager.getTelephonyProperty(mPhone.getPhoneId(),
+                //    "gsm.sim.retry.pin1", null);
+                //retryPin2 = TelephonyManager.getTelephonyProperty(mPhone.getPhoneId(),
+                //    "gsm.sim.retry.pin2", null);
+                //retryPuk1 = TelephonyManager.getTelephonyProperty(mPhone.getPhoneId(),
+                //    "gsm.sim.retry.puk1", null);
+                //retryPuk2 = TelephonyManager.getTelephonyProperty(mPhone.getPhoneId(),
+                //    "gsm.sim.retry.puk2", null);
+
+                Rlog.d(LOG_TAG, "retryPin1:" + retryPin1 + "\n"
+                                          + "retryPin2:" + retryPin2 + "\n"
+                                          + "retryPuk1:" + retryPuk1 + "\n"
+                                          + "retryPuk2:" + retryPuk2 + "\n");
                 if (isRegister()) {
-                    if (!newPinOrPuk.equals(mSic)) {
+                    if (newPinOrPuk == null || oldPinOrPuk == null) {
+                        handlePasswordError(com.android.internal.R.string.mmiError);
+                        return;
+                    }
+
+                    int oldPinLen = oldPinOrPuk.length();
+
+                /// M: Solve 27.14.2 FTA fail due to
+                ///    press "**04*" to change PIN code the ME popup invalid MMI code. @{
+                Phone currentPhone;
+
+                currentPhone = PhoneFactory.getPhone(mPhone.getPhoneId());
+
+                IccCard iccCard = currentPhone.getIccCard();
+                /// @}
+
+                    if (!iccCard.hasIccCard()) {
+                        handlePasswordError(com.android.internal.R.string.mmiError);
+                    } else if (!newPinOrPuk.equals(mSic)) {
                         // password mismatch; return error
                         handlePasswordError(com.android.internal.R.string.mismatchPin);
-                    } else if (pinLen < 4 || pinLen > 8 ) {
+                    } else if ((mSc.equals(SC_PIN) || mSc.equals(SC_PIN2))
+                               && ((pinLen < 4) || (pinLen > 8) || (oldPinLen < 4) || (oldPinLen > 8))) {
                         // invalid length
-                        handlePasswordError(com.android.internal.R.string.invalidPin);
+                        handlePasswordError(com.mediatek.R.string.checkPwdLen);
+                    } else if ((mSc.equals(SC_PUK) || mSc.equals(SC_PUK2))
+                               && (pinLen < 4) || (pinLen > 8)) {
+                        handlePasswordError(com.mediatek.R.string.checkPwdLen);
                     } else if (mSc.equals(SC_PIN)
                             && mUiccApplication != null
                             && mUiccApplication.getState() == AppState.APPSTATE_PUK) {
                         // Sim is puk-locked
                         handlePasswordError(com.android.internal.R.string.needPuk);
+                    } else if (!isValidPin(newPinOrPuk)) {
+                        handlePasswordError(com.android.internal.R.string.mmiError);
                     } else if (mUiccApplication != null) {
                         Rlog.d(LOG_TAG, "process mmi service code using UiccApp sc=" + mSc);
 
                         // We have an app and the pre-checks are OK
                         if (mSc.equals(SC_PIN)) {
+                            if (RETRY_BLOCKED.equals(retryPin1)) {
+                                // PIN1 is in PUK state.
+                                handlePasswordError(com.android.internal.R.string.needPuk);
+                            } else {
+                                //
+                                //mPhone.mCM.changeIccPin(oldPinOrPuk, newPin,
+                                //    obtainMessage(EVENT_SET_COMPLETE, this));
+                                // Use SimCard provided interfaces.
                             mUiccApplication.changeIccLockPassword(oldPinOrPuk, newPinOrPuk,
+
                                     obtainMessage(EVENT_SET_COMPLETE, this));
+                            }
                         } else if (mSc.equals(SC_PIN2)) {
+                            if (RETRY_BLOCKED.equals(retryPin2)) {
+                                // PIN2 is in PUK state.
+                                handlePasswordError(com.android.internal.R.string.needPuk2);
+                            } else {
+                                //
+                                //mPhone.mCM.changeIccPin2(oldPinOrPuk, newPin,
+                                //    obtainMessage(EVENT_SET_COMPLETE, this));
+                                // Use SimCard provided interfaces.
                             mUiccApplication.changeIccFdnPassword(oldPinOrPuk, newPinOrPuk,
                                     obtainMessage(EVENT_SET_COMPLETE, this));
+                            }
                         } else if (mSc.equals(SC_PUK)) {
+                            if (RETRY_BLOCKED.equals(retryPuk1)) {
+                                // PIN1 Dead
+                                handlePasswordError(com.mediatek.R.string.puk1Blocked);
+                            } else {
+                                //
+                                //mPhone.mCM.supplyIccPuk(oldPinOrPuk, newPin,
+                                //    obtainMessage(EVENT_SET_COMPLETE, this));
+                                // Use SimCard provided interfaces.
+                                if (oldPinOrPuk.length() == 8) {
                             mUiccApplication.supplyPuk(oldPinOrPuk, newPinOrPuk,
                                     obtainMessage(EVENT_SET_COMPLETE, this));
+                                } else {
+                                    handlePasswordError(com.mediatek.R.string.invalidPuk);
+                                }
+                            }
                         } else if (mSc.equals(SC_PUK2)) {
+                            if (RETRY_BLOCKED.equals(retryPuk2)) {
+                                // PIN2 Dead
+                                handlePasswordError(com.mediatek.R.string.puk2Blocked);
+                            } else {
+                                //
+                                //mPhone.mCM.supplyIccPuk2(oldPinOrPuk, newPin,
+                                //    obtainMessage(EVENT_SET_COMPLETE, this));
+                                if (oldPinOrPuk.length() == 8) {
                             mUiccApplication.supplyPuk2(oldPinOrPuk, newPinOrPuk,
                                     obtainMessage(EVENT_SET_COMPLETE, this));
-                        } else {
-                            throw new RuntimeException("uicc unsupported service code=" + mSc);
+                               } else {
+                                    handlePasswordError(com.mediatek.R.string.invalidPuk);
+                                }
+                            }
+                    /* M: SS part end */
                         }
                     } else {
                         throw new RuntimeException("No application mUiccApplicaiton is null");
@@ -982,6 +1487,9 @@ public final class GsmMmiCode extends Handler implements MmiCode {
             }
         } catch (RuntimeException exc) {
             mState = State.FAILED;
+            exc.printStackTrace();
+            Rlog.d(LOG_TAG, "exc.toString() = " + exc.toString());
+            Rlog.d(LOG_TAG, "procesCode: mState = FAILED");
             mMessage = mContext.getText(com.android.internal.R.string.mmiError);
             mPhone.onMMIDone(this);
         }
@@ -1008,7 +1516,10 @@ public final class GsmMmiCode extends Handler implements MmiCode {
     void
     onUssdFinished(String ussdMessage, boolean isUssdRequest) {
         if (mState == State.PENDING) {
-            if (ussdMessage == null) {
+            /* M: SS part */
+            /// M: [mtk04070][111125][ALPS00093395]Check the length of ussdMessage.
+            if (ussdMessage == null || ussdMessage.length() == 0) {
+            /* M: SS part end */
                 mMessage = mContext.getText(com.android.internal.R.string.mmiComplete);
             } else {
                 mMessage = ussdMessage;
@@ -1018,8 +1529,25 @@ public final class GsmMmiCode extends Handler implements MmiCode {
             if (!isUssdRequest) {
                 mState = State.COMPLETE;
             }
-
             mPhone.onMMIDone(this);
+        }
+    }
+
+    void
+    onUssdStkHandling(String ussdMessage, boolean isUssdRequest) {
+        if (mState == State.PENDING) {
+            if (ussdMessage == null || ussdMessage.length() == 0) {
+                mMessage = mContext.getText(com.android.internal.R.string.mmiComplete);
+            } else {
+                mMessage = ussdMessage;
+            }
+            mIsUssdRequest = isUssdRequest;
+            // If it's a request, leave it PENDING so that it's cancelable.
+            if (!isUssdRequest) {
+                mState = State.COMPLETE;
+            }
+            String userObjStringStk = USSD_HANDLED_BY_STK;
+            mPhone.onMMIDone(this, (Object) userObjStringStk);
         }
     }
 
@@ -1034,7 +1562,6 @@ public final class GsmMmiCode extends Handler implements MmiCode {
         if (mState == State.PENDING) {
             mState = State.FAILED;
             mMessage = mContext.getText(com.android.internal.R.string.mmiError);
-
             mPhone.onMMIDone(this);
         }
     }
@@ -1071,6 +1598,19 @@ public final class GsmMmiCode extends Handler implements MmiCode {
             obtainMessage(EVENT_USSD_COMPLETE, this));
     }
 
+    /* M: SS part */
+    ///M: For query CNAP
+    void sendCNAPSS(String cnapssMessage) {
+        // Note that unlike most everything else, the USSD complete
+        // response does not complete this MMI code...we wait for
+        // an unsolicited USSD "Notify" or "Request".
+        // The matching up of this is done in GSMPhone.
+        Rlog.d(LOG_TAG, "sendCNAPSS");
+        mPhone.mCi.sendCNAPSS(cnapssMessage, obtainMessage(EVENT_QUERY_COMPLETE, this));
+    }
+    ///@
+    /* M: SS part end */
+
     /** Called from GSMPhone.handleMessage; not a Handler subclass */
     @Override
     public void
@@ -1080,6 +1620,15 @@ public final class GsmMmiCode extends Handler implements MmiCode {
         switch (msg.what) {
             case EVENT_SET_COMPLETE:
                 ar = (AsyncResult) (msg.obj);
+
+                if (mSc.equals(SC_WAIT)
+                    && mPhone.getTbcwMode() == GSMPhone.TBCW_OPTBCW_WITH_CS) {
+                    if (ar.exception == null) {
+                        int ienable = msg.arg1;
+                        boolean enable = ienable == 1 ? true : false;
+                        mPhone.setTerminalBasedCallWaiting(enable, null);
+                    }
+                }
 
                 onSetComplete(msg, ar);
                 break;
@@ -1094,11 +1643,22 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 if ((ar.exception == null) && (msg.arg1 == 1)) {
                     boolean cffEnabled = (msg.arg2 == 1);
                     if (mIccRecords != null) {
-                        mPhone.setVoiceCallForwardingFlag(1, cffEnabled, mDialingNumber);
-                        mPhone.setCallForwardingPreference(cffEnabled);
+                        mIccRecords.setVoiceCallForwardingFlag(1, cffEnabled, mDialingNumber);
+                        /// M: SS OP01 Ut
+                        mPhone.saveTimeSlot(null);
                     }
                 }
 
+                if ((ar.exception != null) && (mOrigUtCfuMode != 0)) {
+                    if (mOrigUtCfuMode == 1) {
+                        mPhone.setSystemProperty(PROPERTY_UT_CFU_NOTIFICATION_MODE,
+                                UT_CFU_NOTIFICATION_MODE_ON);
+                    } else {
+                        mPhone.setSystemProperty(PROPERTY_UT_CFU_NOTIFICATION_MODE,
+                                UT_CFU_NOTIFICATION_MODE_OFF);
+                    }
+                }
+                mOrigUtCfuMode = 0;
                 onSetComplete(msg, ar);
                 break;
 
@@ -1106,7 +1666,19 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 ar = (AsyncResult) (msg.obj);
                 onGetClirComplete(ar);
             break;
+            /* M: SS part */
+            /// M: [mtk04070][111125][ALPS00093395]MTK added for COLP and COLR. @{
+            case EVENT_GET_COLP_COMPLETE:
+                ar = (AsyncResult) (msg.obj);
+                onGetColpComplete(ar);
+            break;
 
+            case EVENT_GET_COLR_COMPLETE:
+                ar = (AsyncResult) (msg.obj);
+                onGetColrComplete(ar);
+            break;
+            /// @}
+            /* M: SS part end */
             case EVENT_QUERY_CF_COMPLETE:
                 ar = (AsyncResult) (msg.obj);
                 onQueryCfComplete(ar);
@@ -1114,6 +1686,31 @@ public final class GsmMmiCode extends Handler implements MmiCode {
 
             case EVENT_QUERY_COMPLETE:
                 ar = (AsyncResult) (msg.obj);
+
+                if (mSc.equals(SC_WAIT)
+                    && mPhone.getTbcwMode() == GSMPhone.TBCW_OPTBCW_WITH_CS) {
+                    Rlog.i(LOG_TAG, "TBCW_OPTBCW_WITH_CS");
+                    if (ar.exception == null) {
+                        int[] cwArray = (int[]) ar.result;
+                        // If cwArray[0] is = 1, then cwArray[1] must follow,
+                        // with the TS 27.007 service class bit vector of services
+                        // for which call waiting is enabled.
+                        try {
+                            Rlog.d(LOG_TAG, "EVENT_GET_CALL_WAITING_FOR_CS_TB"
+                                    + " cwArray[0]:cwArray[1] = "
+                                    + cwArray[0] + ":" + cwArray[1]);
+
+                            boolean csEnable = ((cwArray[0] == 1) &&
+                                ((cwArray[1] & 0x01) == SERVICE_CLASS_VOICE));
+                            mPhone.setTerminalBasedCallWaiting(csEnable, null);
+                        } catch (ArrayIndexOutOfBoundsException e) {
+                            Rlog.e(LOG_TAG, "EVENT_GET_CALL_WAITING_FOR_CS_TB:"
+                                    + " improper result: err ="
+                                    + e.getMessage());
+                        }
+                    }
+                }
+
                 onQueryComplete(ar);
             break;
 
@@ -1122,20 +1719,8 @@ public final class GsmMmiCode extends Handler implements MmiCode {
 
                 if (ar.exception != null) {
                     mState = State.FAILED;
-                    // suppress error pop-up for single dialed digits
-                    if (mDialingNumber != null &&
-                                mDialingNumber.length() == SINGLE_DIGIT_DIALED) {
-                        Log.w(
-                            LOG_TAG,
-                            mContext.getText(com.android.internal.R.string.mmiError).toString()
-                            );
-                            Toast.makeText(
-                                mContext,
-                                mContext.getText(com.android.internal.R.string.mmiError).toString(),
-                                Toast.LENGTH_SHORT).show();
-                    } else {
-                        mMessage = getErrorMessage(ar);
-                    }
+                    mMessage = getErrorMessage(ar);
+
                     mPhone.onMMIDone(this);
                 }
 
@@ -1198,9 +1783,18 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 return mContext.getText(com.android.internal.R.string.PwdMmi);
             } else if (mSc.equals(SC_WAIT)) {
                 return mContext.getText(com.android.internal.R.string.CwMmi);
-            } else if (isPinPukCommand()) {
+            /* M: SS part */
+            } else if (mSc.equals(SC_PIN)) {
                 return mContext.getText(com.android.internal.R.string.PinMmi);
+            } else if (mSc.equals(SC_PIN2)) {
+                return mContext.getText(com.mediatek.R.string.Pin2Mmi);
+            } else if (mSc.equals(SC_PUK)) {
+                return mContext.getText(com.mediatek.R.string.PukMmi);
+            } else if (mSc.equals(SC_PUK2)) {
+                return mContext.getText(com.mediatek.R.string.Puk2Mmi);
             }
+            /// @}
+            /* M: SS part end */
         }
 
         return "";
@@ -1217,15 +1811,26 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 CommandException.Error err = ((CommandException)(ar.exception)).getCommandError();
                 if (err == CommandException.Error.PASSWORD_INCORRECT) {
                     if (isPinPukCommand()) {
+                        /* M: SS part */
+                        /// M: [mtk04070][111125][ALPS00093395]MTK modified. @{
+
                         // look specifically for the PUK commands and adjust
                         // the message accordingly.
-                        if (mSc.equals(SC_PUK) || mSc.equals(SC_PUK2)) {
+                        if (mSc.equals(SC_PUK)) {
                             sb.append(mContext.getText(
                                     com.android.internal.R.string.badPuk));
-                        } else {
+                        } else if (mSc.equals(SC_PUK2)) {
+                            sb.append(mContext.getText(
+                                    com.mediatek.R.string.badPuk2));
+                        } else if (mSc.equals(SC_PIN)) {
                             sb.append(mContext.getText(
                                     com.android.internal.R.string.badPin));
+                        } else if (mSc.equals(SC_PIN2)) {
+                            sb.append(mContext.getText(
+                                    com.mediatek.R.string.badPin2));
                         }
+                        /* M: SS part end */
+
                         // Get the No. of retries remaining to unlock PUK/PUK2
                         int attemptsRemaining = msg.arg1;
                         if (attemptsRemaining <= 0) {
@@ -1243,8 +1848,9 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                                 com.android.internal.R.string.passwordIncorrect));
                     }
                 } else if (err == CommandException.Error.SIM_PUK2) {
-                    sb.append(mContext.getText(
-                            com.android.internal.R.string.badPin));
+                /* M: SS part  */
+                    /// M: [mtk04070][111125][ALPS00093395]MTK modified.
+                    sb.append(mContext.getText(com.mediatek.R.string.badPin2));
                     sb.append("\n");
                     sb.append(mContext.getText(
                             com.android.internal.R.string.needPuk2));
@@ -1252,6 +1858,12 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                     if (mSc.equals(SC_PIN)) {
                         sb.append(mContext.getText(com.android.internal.R.string.enablePin));
                     }
+                /// M: [mtk04070][111125][ALPS00093395]MTK added for call barred. @{
+                } else if (err == CommandException.Error.CALL_BARRED) {
+                    sb.append(mContext.getText(com.mediatek.R.string.callBarringFailMmi));
+                /// @}
+                /* M: SS part end */
+
                 } else if (err == CommandException.Error.FDN_CHECK_FAILURE) {
                     Rlog.i(LOG_TAG, "FDN_CHECK_FAILURE");
                     sb.append(mContext.getText(com.android.internal.R.string.mmiFdnError));
@@ -1308,7 +1920,23 @@ public final class GsmMmiCode extends Handler implements MmiCode {
 
         if (ar.exception != null) {
             mState = State.FAILED;
-            sb.append(getErrorMessage(ar));
+            /* M: SS part end */
+            /// M: [mtk04070][111125][ALPS00093395]MTK modified. @{
+            //sb.append(getErrorMessage(ar));
+            if (ar.exception instanceof CommandException) {
+                CommandException.Error err = ((CommandException) (ar.exception)).getCommandError();
+                if (err == CommandException.Error.CALL_BARRED) {
+                    sb.append(mContext.getText(com.mediatek.R.string.callBarringFailMmi));
+                } else if (err == CommandException.Error.FDN_CHECK_FAILURE) {
+                    sb.append(mContext.getText(com.mediatek.R.string.fdnFailMmi));
+                } else {
+                    sb.append(mContext.getText(com.android.internal.R.string.mmiError));
+                }
+            } else {
+                sb.append(mContext.getText(com.android.internal.R.string.mmiError));
+            }
+            /// @}
+            /* M: SS part end */
         } else {
             int clirArgs[];
 
@@ -1407,6 +2035,13 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 return mContext.getText(com.android.internal.R.string.serviceClassPacket);
             case SERVICE_CLASS_PAD:
                 return mContext.getText(com.android.internal.R.string.serviceClassPAD);
+            /* M: SS part*/
+            /// M: [mtk04070][111125][ALPS00093395]MTK added for line2 and video call. @{
+            case SERVICE_CLASS_LINE2:
+            case SERVICE_CLASS_VIDEO:
+                return mContext.getText(com.mediatek.R.string.serviceClassVideo);
+            /// @}
+            /* M: SS part end */
             default:
                 return null;
         }
@@ -1426,8 +2061,10 @@ public final class GsmMmiCode extends Handler implements MmiCode {
 
         needTimeTemplate =
             (info.reason == CommandsInterface.CF_REASON_NO_REPLY);
-
-        if (info.status == 1) {
+        /* M: SS part end */
+        /// M: [mtk04070][111125][ALPS00093395]Also check if info.number is not empty or null. @{
+        if ((info.status == 1) && !isEmptyOrNull(info.number)) {
+            /* Number cannot be NULL when status is activated */
             if (needTimeTemplate) {
                 template = mContext.getText(
                         com.android.internal.R.string.cfTemplateForwardedTime);
@@ -1435,7 +2072,10 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 template = mContext.getText(
                         com.android.internal.R.string.cfTemplateForwarded);
             }
-        } else if (info.status == 0 && isEmptyOrNull(info.number)) {
+        } else if (isEmptyOrNull(info.number)) {
+        /// @}
+        /* M: SS part end */
+
             template = mContext.getText(
                         com.android.internal.R.string.cfTemplateNotForwarded);
         } else { /* (info.status == 0) && !isEmptyOrNull(info.number) */
@@ -1457,8 +2097,11 @@ public final class GsmMmiCode extends Handler implements MmiCode {
         //      {2} is time in seconds
 
         destinations[0] = serviceClassToCFString(info.serviceClass & serviceClassMask);
-        destinations[1] = formatLtr(
-                PhoneNumberUtils.stringFromStringAndTOA(info.number, info.toa));
+        /* M: SS part end */
+
+        destinations[1] = PhoneNumberUtils.stringFromStringAndTOA(info.number, info.toa);
+        /* M: SS part end */
+
         destinations[2] = Integer.toString(info.timeSeconds);
 
         if (info.reason == CommandsInterface.CF_REASON_UNCONDITIONAL &&
@@ -1466,8 +2109,7 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                         == CommandsInterface.SERVICE_CLASS_VOICE) {
             boolean cffEnabled = (info.status == 1);
             if (mIccRecords != null) {
-                mPhone.setVoiceCallForwardingFlag(1, cffEnabled, info.number);
-                mPhone.setCallForwardingPreference(cffEnabled);
+                mIccRecords.setVoiceCallForwardingFlag(1, cffEnabled, info.number);
             }
         }
 
@@ -1489,7 +2131,23 @@ public final class GsmMmiCode extends Handler implements MmiCode {
 
         if (ar.exception != null) {
             mState = State.FAILED;
-            sb.append(getErrorMessage(ar));
+            /* M: SS part end */
+            /// M: [mtk04070][111125][ALPS00093395]MTK modified. @{
+            //sb.append(getErrorMessage(ar));
+            if (ar.exception instanceof CommandException) {
+                CommandException.Error err = ((CommandException) (ar.exception)).getCommandError();
+                if (err == CommandException.Error.CALL_BARRED) {
+                    sb.append(mContext.getText(com.mediatek.R.string.callBarringFailMmi));
+                } else if (err == CommandException.Error.FDN_CHECK_FAILURE) {
+                    sb.append(mContext.getText(com.mediatek.R.string.fdnFailMmi));
+                } else {
+                    sb.append(mContext.getText(com.android.internal.R.string.mmiError));
+                }
+            } else {
+                sb.append(mContext.getText(com.android.internal.R.string.mmiError));
+            }
+            /// @}
+            /* M: SS part end */
         } else {
             CallForwardInfo infos[];
 
@@ -1501,8 +2159,7 @@ public final class GsmMmiCode extends Handler implements MmiCode {
 
                 // Set unconditional CFF in SIM to false
                 if (mIccRecords != null) {
-                    mPhone.setCallForwardingPreference(false);
-                    mPhone.setVoiceCallForwardingFlag(1, false, null);
+                    mIccRecords.setVoiceCallForwardingFlag(1, false, null);
                 }
             } else {
 
@@ -1514,17 +2171,63 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 // which CallForwardInfo represents it and then build
                 // the response text based on that
 
+                /* M: SS part end */
+                /// M: [mtk04070][111125][ALPS00093395]MTK added. @{
+                boolean isAllCfDisabled = false;
+                for (int i = 0, s = infos.length; i < s ; i++) {
+                    if (infos[i].serviceClass == SERVICE_CLASS_VOICE
+                                               + SERVICE_CLASS_FAX
+                                               + SERVICE_CLASS_SMS
+                                               + SERVICE_CLASS_DATA_SYNC
+                                               + SERVICE_CLASS_DATA_ASYNC) {
+                        isAllCfDisabled = true;
+                        break;
+                    }
+                }
+                Rlog.d(LOG_TAG, "[GsmMmiCode] isAllCfDisabled = " + isAllCfDisabled);
+                /// @}
+
                 for (int serviceClassMask = 1
                             ; serviceClassMask <= SERVICE_CLASS_MAX
                             ; serviceClassMask <<= 1
                 ) {
-                    for (int i = 0, s = infos.length; i < s ; i++) {
-                        if ((serviceClassMask & infos[i].serviceClass) != 0) {
-                            tb.append(makeCFQueryResultMessage(infos[i],
-                                            serviceClassMask));
-                            tb.append("\n");
+                    /// M: [mtk04070][111125][ALPS00093395]MTK added and modified. @{
+                    if (serviceClassMask == SERVICE_CLASS_LINE2) continue;
+
+                    if (isAllCfDisabled) {
+                        if (serviceClassToCFString(serviceClassMask) != null) {
+                            String getServiceName = serviceClassToCFString(serviceClassMask).toString();
+                            if (getServiceName != null)
+                            {
+                                    sb.append(getServiceName);
+                                    sb.append(" : ");
+                                    sb.append(mContext.getText(com.mediatek.R.string.cfServiceNotForwarded));
+                                    sb.append("\n");
+                            }
+                        } else {
+                            Rlog.e(LOG_TAG, "[GsmMmiCode] " + serviceClassMask + " service returns null");
                         }
+                    } else {
+                      for (int i = 0, s = infos.length; i < s ; i++) {
+                        if ((serviceClassMask & infos[i].serviceClass) != 0) {
+                            if (infos[i].status == 1) {
+                               tb.append(makeCFQueryResultMessage(infos[i],
+                                            serviceClassMask));
+                               tb.append("\n");
+                            } else {
+                                    if (serviceClassToCFString(serviceClassMask) != null) {
+                                       String getServiceName1 = serviceClassToCFString(serviceClassMask).toString();
+                                       sb.append(getServiceName1);
+                                       sb.append(" : ");
+                                       sb.append(mContext.getText(com.mediatek.R.string.cfServiceNotForwarded));
+                                       sb.append("\n");
+                                    }
+                            }
+                        }
+                      }
                     }
+                    /// @}
+                    /* M: SS part end */
                 }
                 sb.append(tb);
             }
@@ -1544,7 +2247,23 @@ public final class GsmMmiCode extends Handler implements MmiCode {
 
         if (ar.exception != null) {
             mState = State.FAILED;
-            sb.append(getErrorMessage(ar));
+            /* M: SS part */
+            /// M: [mtk04070][111125][ALPS00093395]MTK modified. @{
+            //sb.append(getErrorMessage(ar));
+            if (ar.exception instanceof CommandException) {
+                CommandException.Error err = ((CommandException) (ar.exception)).getCommandError();
+                if (err == CommandException.Error.CALL_BARRED) {
+                    sb.append(mContext.getText(com.mediatek.R.string.callBarringFailMmi));
+                } else if (err == CommandException.Error.FDN_CHECK_FAILURE) {
+                    sb.append(mContext.getText(com.mediatek.R.string.fdnFailMmi));
+                } else {
+                    sb.append(mContext.getText(com.android.internal.R.string.mmiError));
+                }
+            } else {
+                sb.append(mContext.getText(com.android.internal.R.string.mmiError));
+            }
+            /// @}
+            /* M: SS part end */
         } else {
             int[] ints = (int[])ar.result;
 
@@ -1557,6 +2276,10 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 } else if (isServiceCodeCallBarring(mSc)) {
                     // ints[0] for Call Barring is a bit vector of services
                     sb.append(createQueryCallBarringResultMessage(ints[0]));
+                } else if (mSc.equals(SC_CNAP)) {
+                    ///M: For query CNAP
+                    Rlog.d(LOG_TAG, "onQueryComplete_CNAP");
+                    sb.append(createQueryCnapResultMessage(ints[1]));
                 } else if (ints[0] == 1) {
                     // for all other services, treat it as a boolean
                     sb.append(mContext.getText(com.android.internal.R.string.serviceEnabled));
@@ -1572,6 +2295,28 @@ public final class GsmMmiCode extends Handler implements MmiCode {
         mMessage = sb;
         mPhone.onMMIDone(this);
     }
+
+    /* M: SS part */
+    ///M: For query CNAP
+    private CharSequence
+    createQueryCnapResultMessage(int serviceClass) {
+        Rlog.d(LOG_TAG, "createQueryCnapResultMessage_CNAP");
+        StringBuilder sb =
+                new StringBuilder(mContext.getText(com.android.internal.R.string.serviceEnabledFor));
+
+        for (int classMask = 1
+                    ; classMask <= SERVICE_CLASS_MAX
+                    ; classMask <<= 1
+        ) {
+            if ((classMask & serviceClass) != 0) {
+                sb.append("\n");
+                sb.append(serviceClassToCFString(classMask & serviceClass));
+            }
+        }
+        Rlog.d(LOG_TAG, "CNAP_sb = " + sb);
+        return sb;
+    }
+    /* M: SS part end */
 
     private CharSequence
     createQueryCallWaitingResultMessage(int serviceClass) {
@@ -1629,4 +2374,133 @@ public final class GsmMmiCode extends Handler implements MmiCode {
         sb.append("}");
         return sb.toString();
     }
+
+    /* M: SS part */
+    /// M: [mtk04070][111125][ALPS00093395]MTK proprietary methods. @{
+    static GsmMmiCode
+    newNetworkInitiatedUssdError(String ussdMessage,
+                                boolean isUssdRequest, GSMPhone phone, UiccCardApplication app) {
+        GsmMmiCode ret;
+
+        ret = new GsmMmiCode(phone, app);
+
+        ret.mMessage = ret.mContext.getText(com.android.internal.R.string.mmiError);
+        ret.mIsUssdRequest = isUssdRequest;
+
+        ret.mState = State.FAILED;
+
+        return ret;
+    }
+
+    private boolean isValidPin(String address) {
+        for (int i = 0, count = address.length(); i < count; i++) {
+            if (address.charAt(i) < '0' || address.charAt(i) > '9')
+                return false;
+        }
+        return true;
+    }
+
+    private void
+    onGetColrComplete(AsyncResult ar) {
+        StringBuilder sb = new StringBuilder(getScString());
+        sb.append("\n");
+
+        if (ar.exception != null) {
+            mState = State.FAILED;
+            if (ar.exception instanceof CommandException) {
+                CommandException.Error err = ((CommandException) (ar.exception)).getCommandError();
+                if (err == CommandException.Error.CALL_BARRED) {
+                    sb.append(mContext.getText(com.mediatek.R.string.callBarringFailMmi));
+                } else if (err == CommandException.Error.FDN_CHECK_FAILURE) {
+                    sb.append(mContext.getText(com.mediatek.R.string.fdnFailMmi));
+                } else {
+                    sb.append(mContext.getText(com.android.internal.R.string.mmiError));
+    }
+            } else {
+                sb.append(mContext.getText(com.android.internal.R.string.mmiError));
+            }
+        } else {
+            int colrArgs[];
+
+            colrArgs = (int[]) ar.result;
+
+            // the 'm' parameter from mtk proprietary
+            switch (colrArgs[0]) {
+                case 0: // COLR not provisioned
+                    sb.append(mContext.getText(
+                                com.android.internal.R.string.serviceNotProvisioned));
+                    mState = State.COMPLETE;
+                break;
+
+                case 1: // COLR provisioned
+                    sb.append(mContext.getText(
+                                com.mediatek.R.string.serviceProvisioned));
+                    mState = State.COMPLETE;
+                break;
+
+                case 2: // unknown (e.g. no network, etc.)
+                    sb.append(mContext.getText(
+                                com.android.internal.R.string.mmiError));
+                    mState = State.FAILED;
+                break;
+
+            }
+        }
+
+        mMessage = sb;
+        mPhone.onMMIDone(this);
+    }
+
+    private void
+    onGetColpComplete(AsyncResult ar) {
+        StringBuilder sb = new StringBuilder(getScString());
+        sb.append("\n");
+
+        if (ar.exception != null) {
+            mState = State.FAILED;
+            if (ar.exception instanceof CommandException) {
+                CommandException.Error err = ((CommandException) (ar.exception)).getCommandError();
+                if (err == CommandException.Error.CALL_BARRED) {
+                    sb.append(mContext.getText(com.mediatek.R.string.callBarringFailMmi));
+                } else if (err == CommandException.Error.FDN_CHECK_FAILURE) {
+                    sb.append(mContext.getText(com.mediatek.R.string.fdnFailMmi));
+                } else {
+                    sb.append(mContext.getText(com.android.internal.R.string.mmiError));
+                }
+            } else {
+                sb.append(mContext.getText(com.android.internal.R.string.mmiError));
+            }
+        } else {
+            int colpArgs[];
+
+            colpArgs = (int[]) ar.result;
+
+            // the 'm' parameter from TS 27.007 7.8
+            switch (colpArgs[1]) {
+                case 0: // COLP not provisioned
+                    sb.append(mContext.getText(
+                                com.android.internal.R.string.serviceNotProvisioned));
+                    mState = State.COMPLETE;
+                break;
+
+                case 1: // COLP provisioned
+                    sb.append(mContext.getText(
+                                com.mediatek.R.string.serviceProvisioned));
+                    mState = State.COMPLETE;
+                break;
+
+                case 2: // unknown (e.g. no network, etc.)
+                    sb.append(mContext.getText(
+                                com.mediatek.R.string.serviceUnknown));
+                    mState = State.COMPLETE;
+                break;
+            }
+        }
+
+        mMessage = sb;
+        mPhone.onMMIDone(this);
+    }
+
+    /// @}
+    /* M: SS part end */
 }

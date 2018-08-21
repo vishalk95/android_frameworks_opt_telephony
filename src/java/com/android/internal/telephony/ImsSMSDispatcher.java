@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,12 +26,14 @@ import android.app.PendingIntent;
 import android.app.PendingIntent.CanceledException;
 import android.net.Uri;
 import android.os.AsyncResult;
+// MTK-START
+import android.os.Bundle;
+// MTK-END
 import android.os.Message;
 import android.provider.Telephony.Sms.Intents;
 import android.telephony.Rlog;
-import android.telephony.TelephonyManager;
+
 import com.android.internal.telephony.cdma.CdmaInboundSmsHandler;
-import com.android.internal.R;
 import com.android.internal.telephony.cdma.CdmaSMSDispatcher;
 import com.android.internal.telephony.gsm.GsmInboundSmsHandler;
 import com.android.internal.telephony.gsm.GsmSMSDispatcher;
@@ -51,13 +58,6 @@ public final class ImsSMSDispatcher extends SMSDispatcher {
     private boolean mIms = false;
     private String mImsSmsFormat = SmsConstants.FORMAT_UNKNOWN;
 
-    /**
-     * true if MO SMS over IMS is enabled. Default value is true. false for
-     * carriers with config_send_sms1x_on_voice_call = true when attached to
-     * eHRPD and during active 1x voice call
-     */
-    private boolean mImsSmsEnabled = true;
-
     public ImsSMSDispatcher(PhoneBase phone, SmsStorageMonitor storageMonitor,
             SmsUsageMonitor usageMonitor) {
         super(phone, usageMonitor, null);
@@ -71,12 +71,19 @@ public final class ImsSMSDispatcher extends SMSDispatcher {
         mCdmaInboundSmsHandler = CdmaInboundSmsHandler.makeInboundSmsHandler(phone.getContext(),
                 storageMonitor, phone, (CdmaSMSDispatcher) mCdmaDispatcher);
         mGsmDispatcher = new GsmSMSDispatcher(phone, usageMonitor, this, mGsmInboundSmsHandler);
+        // MTK-START
         Thread broadcastThread = new Thread(new SmsBroadcastUndelivered(phone.getContext(),
-                mGsmInboundSmsHandler, mCdmaInboundSmsHandler));
+                mGsmInboundSmsHandler, mCdmaInboundSmsHandler, phone));
+        // MTK-END
         broadcastThread.start();
 
         mCi.registerForOn(this, EVENT_RADIO_ON, null);
         mCi.registerForImsNetworkStateChanged(this, EVENT_IMS_STATE_CHANGED, null);
+
+        // MTK-START
+        // It needs to update the phone object at the first time. It is the Google issue.
+        updatePhoneObject(phone);
+        // MTK-END
     }
 
     /* Updates the phone object when there is a change */
@@ -181,15 +188,13 @@ public final class ImsSMSDispatcher extends SMSDispatcher {
     protected void sendMultipartText(String destAddr, String scAddr,
             ArrayList<String> parts, ArrayList<PendingIntent> sentIntents,
             ArrayList<PendingIntent> deliveryIntents, Uri messageUri, String callingPkg,
-            boolean persistMessage, int priority, boolean isExpectMore, int validityPeriod) {
+            boolean persistMessage) {
         if (isCdmaMo()) {
             mCdmaDispatcher.sendMultipartText(destAddr, scAddr,
-                    parts, sentIntents, deliveryIntents, messageUri, callingPkg, persistMessage,
-                    priority, isExpectMore, validityPeriod);
+                    parts, sentIntents, deliveryIntents, messageUri, callingPkg, persistMessage);
         } else {
             mGsmDispatcher.sendMultipartText(destAddr, scAddr,
-                    parts, sentIntents, deliveryIntents, messageUri, callingPkg, persistMessage,
-                    priority, isExpectMore, validityPeriod);
+                    parts, sentIntents, deliveryIntents, messageUri, callingPkg, persistMessage);
         }
     }
 
@@ -209,16 +214,14 @@ public final class ImsSMSDispatcher extends SMSDispatcher {
     @Override
     protected void sendText(String destAddr, String scAddr, String text, PendingIntent sentIntent,
             PendingIntent deliveryIntent, Uri messageUri, String callingPkg,
-            boolean persistMessage, int priority, boolean isExpectMore, int validityPeriod) {
+            boolean persistMessage) {
         Rlog.d(TAG, "sendText");
         if (isCdmaMo()) {
             mCdmaDispatcher.sendText(destAddr, scAddr,
-                    text, sentIntent, deliveryIntent, messageUri, callingPkg, persistMessage,
-                    priority, isExpectMore, validityPeriod);
+                    text, sentIntent, deliveryIntent, messageUri, callingPkg, persistMessage);
         } else {
             mGsmDispatcher.sendText(destAddr, scAddr,
-                    text, sentIntent, deliveryIntent, messageUri, callingPkg, persistMessage,
-                    priority, isExpectMore, validityPeriod);
+                    text, sentIntent, deliveryIntent, messageUri, callingPkg, persistMessage);
         }
     }
 
@@ -277,7 +280,6 @@ public final class ImsSMSDispatcher extends SMSDispatcher {
         if (oldFormat.equals(newFormat)) {
             if (isCdmaFormat(newFormat)) {
                 Rlog.d(TAG, "old format matched new format (cdma)");
-                shouldSendSmsOverIms();
                 mCdmaDispatcher.sendSms(tracker);
                 return;
             } else {
@@ -314,7 +316,6 @@ public final class ImsSMSDispatcher extends SMSDispatcher {
                 Rlog.d(TAG, "old format (gsm) ==> new format (cdma)");
                 pdu = com.android.internal.telephony.cdma.SmsMessage.getSubmitPdu(
                         scAddr, destAddr, text, (tracker.mDeliveryIntent != null), null);
-                shouldSendSmsOverIms();
             } else {
                 Rlog.d(TAG, "old format (cdma) ==> new format (gsm)");
                 pdu = com.android.internal.telephony.gsm.SmsMessage.getSubmitPdu(
@@ -330,7 +331,6 @@ public final class ImsSMSDispatcher extends SMSDispatcher {
                 pdu = com.android.internal.telephony.cdma.SmsMessage.getSubmitPdu(
                             scAddr, destAddr, destPort.intValue(), data,
                             (tracker.mDeliveryIntent != null));
-                shouldSendSmsOverIms();
             } else {
                 Rlog.d(TAG, "old format (cdma) ==> new format (gsm)");
                 pdu = com.android.internal.telephony.gsm.SmsMessage.getSubmitPdu(
@@ -372,16 +372,21 @@ public final class ImsSMSDispatcher extends SMSDispatcher {
     @Override
     protected SmsTracker getNewSubmitPduTracker(String destinationAddress, String scAddress,
             String message, SmsHeader smsHeader, int format, PendingIntent sentIntent,
-            PendingIntent deliveryIntent, boolean lastPart, int priority, boolean isExpectMore,
-            int validityPeriod, AtomicInteger unsentPartCount, AtomicBoolean anyPartFailed,
-            Uri messageUri, String fullMessageText) {
+            PendingIntent deliveryIntent, boolean lastPart,
+            AtomicInteger unsentPartCount, AtomicBoolean anyPartFailed, Uri messageUri,
+            String fullMessageText) {
         Rlog.e(TAG, "Error! Not implemented for IMS.");
         return null;
     }
 
     @Override
     public boolean isIms() {
-        return mIms;
+        // MTK-START
+        // FIXME: VoLTE SMS architecture is different from Google design, return false always
+        // in order not using AOSP flow to send VoLTE SMS
+        return false;
+        //return mIms;
+        // MTK-END
     }
 
     @Override
@@ -397,9 +402,8 @@ public final class ImsSMSDispatcher extends SMSDispatcher {
      * @return true if Cdma format should be used for MO SMS, false otherwise.
      */
     private boolean isCdmaMo() {
-        if (!isIms() || !shouldSendSmsOverIms()) {
-            // Either IMS is not registered or there is an active 1x voice call
-            // while on eHRPD, use Voice technology to determine SMS format.
+        if (!isIms()) {
+            // IMS is not registered, use Voice technology to determine SMS format.
             return (PhoneConstants.PHONE_TYPE_CDMA == mPhone.getPhoneType());
         }
         // IMS is registered with SMS support
@@ -416,51 +420,274 @@ public final class ImsSMSDispatcher extends SMSDispatcher {
         return (mCdmaDispatcher.getFormat().equals(format));
     }
 
+    // MTK-START
     /**
-     * Enables MO SMS over IMS
+     * Send a data based SMS to a specific application port.
      *
-     * @param enable
+     * @param destAddr the address to send the message to
+     * @param scAddr is the service center address or null to use
+     *  the current default SMSC
+     * @param destPort the port to deliver the message to
+     * @param originalPort the port to deliver the message from
+     * @param data the body of the message to send
+     * @param sentIntent if not NULL this <code>PendingIntent</code> is
+     *  broadcast when the message is successfully sent, or failed.
+     *  The result code will be <code>Activity.RESULT_OK<code> for success,
+     *  or one of these errors:<br>
+     *  <code>RESULT_ERROR_GENERIC_FAILURE</code><br>
+     *  <code>RESULT_ERROR_RADIO_OFF</code><br>
+     *  <code>RESULT_ERROR_NULL_PDU</code><br>
+     *  For <code>RESULT_ERROR_GENERIC_FAILURE</code> the sentIntent may include
+     *  the extra "errorCode" containing a radio technology specific value,
+     *  generally only useful for troubleshooting.<br>
+     *  The per-application based SMS control checks sentIntent. If sentIntent
+     *  is NULL the caller will be checked against all unknown applications,
+     *  which cause smaller number of SMS to be sent in checking period.
+     * @param deliveryIntent if not NULL this <code>PendingIntent</code> is
+     *  broadcast when the message is delivered to the recipient.  The
+     *  raw pdu of the status report is in the extended data ("pdu").
      */
-    public void enableSendSmsOverIms(boolean enable) {
-        mImsSmsEnabled = enable;
-    }
-
-    /**
-     * Determines whether MO SMS over IMS is currently enabled.
-     *
-     * @return true if MO SMS over IMS is enabled, false otherwise.
-     */
-    public boolean isImsSmsEnabled() {
-        return mImsSmsEnabled;
-    }
-
-    /**
-     * Determines whether SMS should be sent over IMS if UE is attached to eHRPD
-     * and there is an active voice call
-     *
-     * @return true if SMS should be sent over IMS based on value in config.xml
-     *         or system property false otherwise
-     */
-    public boolean shouldSendSmsOverIms() {
-        boolean sendSmsOn1x = mContext.getResources().getBoolean(
-                com.android.internal.R.bool.config_send_sms1x_on_voice_call);
-        PhoneConstants.State currentCallState = mPhone.getState();
-        int currentVoiceNetwork = mPhone.getServiceState().getVoiceNetworkType();
-        int currentDataNetwork = mPhone.getServiceState().getDataNetworkType();
-
-        Rlog.d(TAG, "data = " + currentDataNetwork + " voice = " + currentVoiceNetwork
-                + " call state = " + currentCallState);
-
-        if (sendSmsOn1x) {
-            // The UE shall use 1xRTT for SMS if the UE is attached to an eHRPD
-            // network and there is an active 1xRTT voice call.
-            if (currentDataNetwork == TelephonyManager.NETWORK_TYPE_EHRPD
-                    && currentVoiceNetwork == TelephonyManager.NETWORK_TYPE_1xRTT
-                    && currentCallState != PhoneConstants.State.IDLE) {
-                enableSendSmsOverIms(false);
-                return false;
-            }
+    protected void sendData(String destAddr, String scAddr, int destPort, int originalPort,
+            byte[] data, PendingIntent sentIntent, PendingIntent deliveryIntent) {
+        if (isCdmaMo()) {
+            mCdmaDispatcher.sendData(destAddr, scAddr, destPort, originalPort, data, sentIntent, deliveryIntent);
+        } else {
+            mGsmDispatcher.sendData(destAddr, scAddr, destPort, originalPort, data, sentIntent, deliveryIntent);
         }
-        return true;
     }
+
+    /**
+     * Send a multi-part data based SMS.
+     *
+     * @param destinationAddress the address to send the message to
+     * @param scAddress is the service center address or null to use
+     *   the current default SMSC
+     * @param data an <code>ArrayList</code> of strings that, in order,
+     *   comprise the original message
+     * @param destPort the port to deliver the message to
+     * @param data an array of data messages in order,
+     *   comprise the original message
+     * @param sentIntents if not null, an <code>ArrayList</code> of
+     *   <code>PendingIntent</code>s (one for each message part) that is
+     *   broadcast when the corresponding message part has been sent.
+     *   The result code will be <code>Activity.RESULT_OK<code> for success,
+     *   or one of these errors:
+     *   <code>RESULT_ERROR_GENERIC_FAILURE</code>
+     *   <code>RESULT_ERROR_RADIO_OFF</code>
+     *   <code>RESULT_ERROR_NULL_PDU</code>.
+     * @param deliveryIntents if not null, an <code>ArrayList</code> of
+     *   <code>PendingIntent</code>s (one for each message part) that is
+     *   broadcast when the corresponding message part has been delivered
+     *   to the recipient.  The raw pdu of the status report is in the
+     *   extended data ("pdu").
+     */
+    protected void sendMultipartData(
+            String destAddr, String scAddr, int destPort,
+            ArrayList<SmsRawData> data, ArrayList<PendingIntent> sentIntents,
+            ArrayList<PendingIntent> deliveryIntents) {
+        if (isCdmaMo()) {
+            mCdmaDispatcher.sendMultipartData(destAddr, scAddr, destPort, data, sentIntents, deliveryIntents);
+        } else {
+            mGsmDispatcher.sendMultipartData(destAddr, scAddr, destPort, data, sentIntents, deliveryIntents);
+        }
+    }
+
+    /**
+     * Copy a text SMS to the ICC.
+     *
+     * @param scAddress Service center address
+     * @param address   Destination address or original address
+     * @param text      List of message text
+     * @param status    message status (STATUS_ON_ICC_READ, STATUS_ON_ICC_UNREAD,
+     *                  STATUS_ON_ICC_SENT, STATUS_ON_ICC_UNSENT)
+     * @param timestamp Timestamp when service center receive the message
+     * @return success or not
+     *
+     */
+    public int copyTextMessageToIccCard(String scAddress, String address, List<String> text,
+            int status, long timestamp) {
+        if (isCdmaMo()) {
+            return mCdmaDispatcher.copyTextMessageToIccCard(scAddress, address, text, status,
+                    timestamp);
+        } else {
+            return mGsmDispatcher.copyTextMessageToIccCard(scAddress, address, text, status,
+                    timestamp);
+        }
+    }
+
+    /**
+     * Send an SMS with specified encoding type.
+     *
+     * @param destAddr the address to send the message to
+     * @param scAddr the SMSC to send the message through, or NULL for the
+     *  default SMSC
+     * @param text the body of the message to send
+     * @param encodingType the encoding type of content of message(GSM 7-bit, Unicode or Automatic)
+     * @param sentIntent if not NULL this <code>PendingIntent</code> is
+     *  broadcast when the message is sucessfully sent, or failed.
+     *  The result code will be <code>Activity.RESULT_OK<code> for success,
+     *  or one of these errors:<br>
+     *  <code>RESULT_ERROR_GENERIC_FAILURE</code><br>
+     *  <code>RESULT_ERROR_RADIO_OFF</code><br>
+     *  <code>RESULT_ERROR_NULL_PDU</code><br>
+     *  For <code>RESULT_ERROR_GENERIC_FAILURE</code> the sentIntent may include
+     *  the extra "errorCode" containing a radio technology specific value,
+     *  generally only useful for troubleshooting.<br>
+     *  The per-application based SMS control checks sentIntent. If sentIntent
+     *  is NULL the caller will be checked against all unknown applications,
+     *  which cause smaller number of SMS to be sent in checking period.
+     * @param deliveryIntent if not NULL this <code>PendingIntent</code> is
+     *  broadcast when the message is delivered to the recipient.  The
+     *  raw pdu of the status report is in the extended data ("pdu").
+     * @param messageUri optional URI of the message if it is already stored in the system
+     * @param callingPkg the calling package name
+     * @param persistMessage whether to save the sent message into SMS DB for a
+     *   non-default SMS app.
+     */
+    protected void sendTextWithEncodingType(String destAddr, String scAddr, String text,
+            int encodingType, PendingIntent sentIntent, PendingIntent deliveryIntent,
+            Uri messageUri, String callingPkg, boolean persistMessage) {
+        if (isCdmaMo()) {
+            mCdmaDispatcher.sendTextWithEncodingType(destAddr, scAddr, text, encodingType,
+                    sentIntent, deliveryIntent, messageUri, callingPkg, persistMessage);
+        } else {
+            mGsmDispatcher.sendTextWithEncodingType(destAddr, scAddr, text, encodingType,
+                    sentIntent, deliveryIntent, messageUri, callingPkg, persistMessage);
+        }
+    }
+
+    /**
+     * Send a multi-part text based SMS with specified encoding type.
+     *
+     * @param destAddr the address to send the message to
+     * @param scAddr is the service center address or null to use
+     *   the current default SMSC
+     * @param parts an <code>ArrayList</code> of strings that, in order,
+     *   comprise the original message
+     * @param encodingType the encoding type of content of message(GSM 7-bit, Unicode or Automatic)
+     * @param sentIntents if not null, an <code>ArrayList</code> of
+     *   <code>PendingIntent</code>s (one for each message part) that is
+     *   broadcast when the corresponding message part has been sent.
+     *   The result code will be <code>Activity.RESULT_OK<code> for success,
+     *   or one of these errors:
+     *   <code>RESULT_ERROR_GENERIC_FAILURE</code>
+     *   <code>RESULT_ERROR_RADIO_OFF</code>
+     *   <code>RESULT_ERROR_NULL_PDU</code>.
+     * @param deliveryIntents if not null, an <code>ArrayList</code> of
+     *   <code>PendingIntent</code>s (one for each message part) that is
+     *   broadcast when the corresponding message part has been delivered
+     *   to the recipient.  The raw pdu of the status report is in the
+     *   extended data ("pdu").
+     * @param messageUri optional URI of the message if it is already stored in the system
+     * @param callingPkg the calling package name
+     * @param persistMessage whether to save the sent message into SMS DB for a
+     *   non-default SMS app.
+     */
+    protected void sendMultipartTextWithEncodingType(String destAddr, String scAddr,
+            ArrayList<String> parts, int encodingType, ArrayList<PendingIntent> sentIntents,
+            ArrayList<PendingIntent> deliveryIntents, Uri messageUri, String callingPkg,
+            boolean persistMessage) {
+        if (isCdmaMo()) {
+            mCdmaDispatcher.sendMultipartTextWithEncodingType(destAddr, scAddr, parts,
+                    encodingType, sentIntents, deliveryIntents, messageUri, callingPkg,
+                    persistMessage);
+        } else {
+            mGsmDispatcher.sendMultipartTextWithEncodingType(destAddr, scAddr, parts,
+                    encodingType, sentIntents, deliveryIntents, messageUri, callingPkg,
+                    persistMessage);
+        }
+    }
+
+    /**
+     * Send an SMS with specified encoding type.
+     *
+     * @param destAddr the address to send the message to
+     * @param scAddr the SMSC to send the message through, or NULL for the
+     *  default SMSC
+     * @param text the body of the message to send
+     * @param extraParams extra parameters, such as validity period, encoding type
+     * @param sentIntent if not NULL this <code>PendingIntent</code> is
+     *  broadcast when the message is sucessfully sent, or failed.
+     * @param deliveryIntent if not NULL this <code>PendingIntent</code> is
+     *  broadcast when the message is delivered to the recipient.  The
+     *  raw pdu of the status report is in the extended data ("pdu").
+     * @param messageUri optional URI of the message if it is already stored in the system
+     * @param callingPkg the calling package name
+     * @param persistMessage whether to save the sent message into SMS DB for a
+     *   non-default SMS app.
+     */
+    public void sendTextWithExtraParams(String destAddr, String scAddr, String text,
+            Bundle extraParams, PendingIntent sentIntent, PendingIntent deliveryIntent,
+            Uri messageUri, String callingPkg, boolean persistMessage) {
+        if (isCdmaMo()) {
+            mCdmaDispatcher.sendTextWithExtraParams(destAddr, scAddr, text, extraParams,
+                    sentIntent, deliveryIntent, messageUri, callingPkg, persistMessage);
+        } else {
+            mGsmDispatcher.sendTextWithExtraParams(destAddr, scAddr, text, extraParams,
+                    sentIntent, deliveryIntent, messageUri, callingPkg, persistMessage);
+        }
+    }
+
+    /**
+     * Send a multi-part text based SMS with specified encoding type.
+     *
+     * @param destAddr the address to send the message to
+     * @param scAddr is the service center address or null to use
+     *   the current default SMSC
+     * @param parts an <code>ArrayList</code> of strings that, in order,
+     *   comprise the original message
+     * @param extraParams extra parameters, such as validity period, encoding type
+     * @param sentIntents if not null, an <code>ArrayList</code> of
+     *   <code>PendingIntent</code>s (one for each message part) that is
+     *   broadcast when the corresponding message part has been sent.
+     * @param deliveryIntents if not null, an <code>ArrayList</code> of
+     *   <code>PendingIntent</code>s (one for each message part) that is
+     *   broadcast when the corresponding message part has been delivered
+     *   to the recipient.  The raw pdu of the status report is in the
+     *   extended data ("pdu").
+     * @param messageUri optional URI of the message if it is already stored in the system
+     * @param callingPkg the calling package name
+     * @param persistMessage whether to save the sent message into SMS DB for a
+     *   non-default SMS app.
+     */
+    public void sendMultipartTextWithExtraParams(String destAddr, String scAddr,
+            ArrayList<String> parts, Bundle extraParams, ArrayList<PendingIntent> sentIntents,
+            ArrayList<PendingIntent> deliveryIntents, Uri messageUri, String callingPkg,
+            boolean persistMessage) {
+        if (isCdmaMo()) {
+            mCdmaDispatcher.sendMultipartTextWithExtraParams(destAddr, scAddr, parts, extraParams,
+                    sentIntents, deliveryIntents, messageUri, callingPkg, persistMessage);
+        } else {
+            mGsmDispatcher.sendMultipartTextWithExtraParams(destAddr, scAddr, parts, extraParams,
+                    sentIntents, deliveryIntents, messageUri, callingPkg, persistMessage);
+        }
+    }
+
+    /**
+     * Called when SimSmsInterfaceManager update SIM card fail due to SIM_FULL.
+     */
+    protected void handleIccFull() {
+        // broadcast SIM_FULL intent
+        if (isCdmaMo()) {
+            mCdmaDispatcher.handleIccFull();
+        } else  {
+            mGsmDispatcher.handleIccFull();
+        }
+    }
+
+    /**
+     * Set the memory storage status of the SMS
+     * This function is used for FTA test only
+     *
+     * @param status false for storage full, true for storage available
+     *
+     */
+    protected void setSmsMemoryStatus(boolean status) {
+        if (isCdmaMo()) {
+            mCdmaDispatcher.setSmsMemoryStatus(status);
+        } else {
+            mGsmDispatcher.setSmsMemoryStatus(status);
+        }
+    }
+    // MTK-END
 }

@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +49,11 @@ import static com.android.internal.telephony.SmsConstants.MAX_USER_DATA_SEPTETS;
 import static com.android.internal.telephony.SmsConstants.MAX_USER_DATA_BYTES;
 import static com.android.internal.telephony.SmsConstants.MAX_USER_DATA_BYTES_WITH_HEADER;
 
+// MTK-START
+import static com.android.internal.telephony.SmsConstants.MAX_USER_DATA_SEPTETS_WITH_HEADER;
+import android.os.SystemProperties;
+// MTK-END
+
 /**
  * A Short Message Service message.
  *
@@ -71,6 +81,9 @@ public class SmsMessage extends SmsMessageBase {
     // e.g. 23.040 9.2.2.1
     private boolean mReplyPathPresent = false;
 
+    /** The address of the receiver. */
+    private GsmSmsAddress mRecipientAddress;
+
     /**
      *  TP-Status - status of a previously submitted SMS.
      *  This field applies to SMS-STATUS-REPORT messages.  0 indicates success;
@@ -86,20 +99,29 @@ public class SmsMessage extends SmsMessageBase {
 
     private int mVoiceMailCount = 0;
 
-    private static final int VALIDITY_PERIOD_FORMAT_NONE = 0x00;
-    private static final int VALIDITY_PERIOD_FORMAT_ENHANCED = 0x01;
-    private static final int VALIDITY_PERIOD_FORMAT_RELATIVE = 0x02;
-    private static final int VALIDITY_PERIOD_FORMAT_ABSOLUTE = 0x03;
+    // MTK-START
+    // Initial value for encoding type
+    private int mEncodingType = ENCODING_UNKNOWN;
 
-    //Validity Period min - 5 mins
-    private static final int VALIDITY_PERIOD_MIN = 5;
-    //Validity Period max - 63 weeks
-    private static final int VALIDITY_PERIOD_MAX = 635040;
+    public static final int ENCODING_7BIT_SINGLE = 11;
+    public static final int ENCODING_7BIT_LOCKING = 12;
+    public static final int ENCODING_7BIT_LOCKING_SINGLE = 13;
 
-    private static final int INVALID_VALIDITY_PERIOD = -1;
+    public static final int MASK_MESSAGE_TYPE_INDICATOR     = 0x03;
+    public static final int MASK_VALIDITY_PERIOD_FORMAT     = 0x18;
+    public static final int MASK_USER_DATA_HEADER_INDICATOR = 0x40;
+
+    public static final int MASK_VALIDITY_PERIOD_FORMAT_NONE = 0x00;
+    public static final int MASK_VALIDITY_PERIOD_FORMAT_RELATIVE = 0x10;
+    public static final int MASK_VALIDITY_PERIOD_FORMAT_ENHANCED = 0x08;
+    public static final int MASK_VALIDITY_PERIOD_FORMAT_ABSOLUTE = 0x18;
+    // MTK-END
 
     public static class SubmitPdu extends SubmitPduBase {
     }
+    // MTK-START
+    public static class DeliverPdu extends DeliverPduBase { }
+    // MTK-END
 
     /**
      * Create an SmsMessage from a raw PDU.
@@ -211,45 +233,6 @@ public class SmsMessage extends SmsMessageBase {
     }
 
     /**
-     * Get Encoded Relative Validty Period Value from Validity period in mins.
-     *
-     * @param validityPeriod Validity period in mins.
-     *
-     * Refer specification 3GPP TS 23.040 V6.8.1 section 9.2.3.12.1.
-     * ||relValidityPeriod (TP-VP)  ||                 ||  validityPeriod   ||
-     *
-     *      0 to 143                            --->       (TP-VP + 1) x 5 minutes
-     *
-     *      144 to 167                         --->        12 hours + ((TP-VP -143) x 30 minutes)
-     *
-     *      168 to 196                         --->        (TP-VP - 166) x 1 day
-     *
-     *      197 to 255                         --->        (TP-VP - 192) x 1 week
-     *
-     * @return relValidityPeriod Encoded Relative Validity Period Value.
-     * @hide
-     */
-    public static int getRelativeValidityPeriod(int validityPeriod) {
-        int relValidityPeriod = INVALID_VALIDITY_PERIOD;
-
-        if (validityPeriod < VALIDITY_PERIOD_MIN  || validityPeriod > VALIDITY_PERIOD_MAX) {
-            Rlog.e(LOG_TAG,"Invalid Validity Period" + validityPeriod);
-            return relValidityPeriod;
-        }
-
-        if (validityPeriod <= 720) {
-            relValidityPeriod = (validityPeriod  / 5) - 1;
-        } else if (validityPeriod <= 1440) {
-            relValidityPeriod = ((validityPeriod - 720) / 30) + 143;
-        } else if (validityPeriod <= 43200) {
-            relValidityPeriod = (validityPeriod  / 1440) + 166;
-        } else if (validityPeriod <= 635040) {
-            relValidityPeriod = (validityPeriod  / 10080) + 192;
-        }
-        return relValidityPeriod;
-    }
-
-    /**
      * Get an SMS-SUBMIT PDU for a destination address and a message
      *
      * @param scAddress Service Centre address.  Null means use default.
@@ -284,29 +267,6 @@ public class SmsMessage extends SmsMessageBase {
             String destinationAddress, String message,
             boolean statusReportRequested, byte[] header, int encoding,
             int languageTable, int languageShiftTable) {
-        return getSubmitPdu(scAddress, destinationAddress, message, statusReportRequested,
-            header, encoding, languageTable, languageShiftTable, -1);
-    }
-
-    /**
-     * Get an SMS-SUBMIT PDU for a destination address and a message using the
-     * specified encoding.
-     *
-     * @param scAddress Service Centre address.  Null means use default.
-     * @param encoding Encoding defined by constants in
-     *        com.android.internal.telephony.SmsConstants.ENCODING_*
-     * @param languageTable
-     * @param languageShiftTable
-     * @param validityPeriod Validity Period of the message in Minutes.
-     * @return a <code>SubmitPdu</code> containing the encoded SC
-     *         address, if applicable, and the encoded message.
-     *         Returns null on encode error.
-     * @hide
-     */
-    public static SubmitPdu getSubmitPdu(String scAddress,
-            String destinationAddress, String message,
-            boolean statusReportRequested, byte[] header, int encoding,
-            int languageTable, int languageShiftTable, int validityPeriod) {
 
         // Perform null parameter checks.
         if (message == null || destinationAddress == null) {
@@ -343,19 +303,8 @@ public class SmsMessage extends SmsMessageBase {
         }
 
         SubmitPdu ret = new SubmitPdu();
-
-        int validityPeriodFormat = VALIDITY_PERIOD_FORMAT_NONE;
-        int relativeValidityPeriod = INVALID_VALIDITY_PERIOD;
-
-        // TP-Validity-Period-Format (TP-VPF) in 3GPP TS 23.040 V6.8.1 section 9.2.3.3
-        //bit 4:3 = 10 - TP-VP field present - relative format
-        if((relativeValidityPeriod = getRelativeValidityPeriod(validityPeriod)) >= 0) {
-            validityPeriodFormat = VALIDITY_PERIOD_FORMAT_RELATIVE;
-        }
-
-        byte mtiByte = (byte)(0x01 | (validityPeriodFormat << 0x03) |
-                (header != null ? 0x40 : 0x00));
-
+        // MTI = SMS-SUBMIT, UDHI = header != null
+        byte mtiByte = (byte)(0x01 | (header != null ? 0x40 : 0x00));
         ByteArrayOutputStream bo = getSubmitPduHead(
                 scAddress, destinationAddress, mtiByte,
                 statusReportRequested, ret);
@@ -416,11 +365,7 @@ public class SmsMessage extends SmsMessageBase {
             bo.write(0x08);
         }
 
-        if (validityPeriodFormat == VALIDITY_PERIOD_FORMAT_RELATIVE) {
-            // ( TP-Validity-Period - relative format)
-            bo.write(relativeValidityPeriod);
-        }
-
+        // (no TP-Validity-Period)
         bo.write(userData, 0, userData.length);
         ret.encodedMessage = bo.toByteArray();
         return ret;
@@ -467,24 +412,6 @@ public class SmsMessage extends SmsMessageBase {
             boolean statusReportRequested) {
 
         return getSubmitPdu(scAddress, destinationAddress, message, statusReportRequested, null);
-    }
-
-    /**
-     * Get an SMS-SUBMIT PDU for a destination address and a message
-     *
-     * @param scAddress Service Centre address.  Null means use default.
-     * @param destinationAddress the address of the destination for the message
-     * @param statusReportRequested staus report of the message Requested
-     * @param validityPeriod Validity Period of the message in Minutes.
-     * @return a <code>SubmitPdu</code> containing the encoded SC
-     *         address, if applicable, and the encoded message.
-     *         Returns null on encode error.
-     */
-    public static SubmitPdu getSubmitPdu(String scAddress,
-            String destinationAddress, String message,
-            boolean statusReportRequested, int validityPeriod) {
-        return getSubmitPdu(scAddress, destinationAddress, message, statusReportRequested,
-                null, ENCODING_UNKNOWN, 0, 0, validityPeriod);
     }
 
     /**
@@ -588,11 +515,22 @@ public class SmsMessage extends SmsMessageBase {
 
         // destination address length in BCD digits, ignoring TON byte and pad
         // TODO Should be better.
-        bo.write((daBytes.length - 1) * 2
-                - ((daBytes[daBytes.length - 1] & 0xf0) == 0xf0 ? 1 : 0));
+        // MTK-START
+        if (daBytes != null) {
+        // MTK-END
+            bo.write((daBytes.length - 1) * 2
+                     - ((daBytes[daBytes.length - 1] & 0xf0) == 0xf0 ? 1 : 0));
 
-        // destination address
-        bo.write(daBytes, 0, daBytes.length);
+            // destination address
+            bo.write(daBytes, 0, daBytes.length);
+        // MTK-START
+        } else {
+            // TP-Protocol-Identifier
+            Rlog.d(LOG_TAG, "write an empty address for submit pdu");
+            bo.write(0);
+            bo.write(PhoneNumberUtils.TOA_Unknown);
+        }
+        // MTK-END
 
         // TP-Protocol-Identifier
         bo.write(0);
@@ -1060,12 +998,18 @@ public class SmsMessage extends SmsMessageBase {
         // TP-Status
         mStatus = p.getByte();
 
+        // MTK-START
+        mMessageBody = "";
+        // MTK-END
+
         // The following are optional fields that may or may not be present.
         if (p.moreDataPresent()) {
             // TP-Parameter-Indicator
             int extraParams = p.getByte();
             int moreExtraParams = extraParams;
-            while ((moreExtraParams & 0x80) != 0) {
+            // MTK-START
+            while (((moreExtraParams & 0x80) != 0) && (p.moreDataPresent() == true)) {
+            // MTK-END
                 // We only know how to parse a few extra parameters, all
                 // indicated in the first TP-PI octet, so skip over any
                 // additional TP-PI octets.
@@ -1136,6 +1080,10 @@ public class SmsMessage extends SmsMessageBase {
         mMessageRef = p.getByte();
 
         mRecipientAddress = p.getAddress();
+        // MTK-START
+        // for SmsMessageBase, and can getDestinationAddress by AP
+        destinationAddress = mRecipientAddress;
+        // MTK-END
 
         if (mRecipientAddress != null) {
             if (VDBG) Rlog.v(LOG_TAG, "SMS recipient address: " + mRecipientAddress.address);
@@ -1301,6 +1249,11 @@ public class SmsMessage extends SmsMessageBase {
                 encodingType == ENCODING_7BIT);
         this.mUserData = p.getUserData();
         this.mUserDataHeader = p.getUserDataHeader();
+
+        // MTK-START
+        // Remember the value for the getEncodingType function
+        mEncodingType = encodingType;
+        // MTK-END
 
         /*
          * Look for voice mail indication in TP_UDH TS23.040 9.2.3.24
@@ -1470,4 +1423,756 @@ public class SmsMessage extends SmsMessageBase {
         }
         return mVoiceMailCount;
     }
+
+    // MTK-START
+    /**
+     * Get an SMS-SUBMIT PDU for a data message to a destination address &amp; port
+     *
+     * @param scAddress Service Centre address. null == use default
+     * @param destinationAddress the address of the destination for the message
+     * @param destinationPort the port to deliver the message to at the
+     *        destination
+     * @param originalPort the port to deliver the message from
+     * @param data the dat for the message
+     * @return a <code>SubmitPdu</code> containing the encoded SC
+     *         address, if applicable, and the encoded message.
+     *         Returns null on encode error.
+     */
+    public static SubmitPdu getSubmitPdu(String scAddress,
+            String destinationAddress, int destinationPort, int originalPort, byte[] data,
+            boolean statusReportRequested) {
+
+        byte[] smsHeaderData = SmsHeader.getSubmitPduHeader(destinationPort, originalPort);
+        if (smsHeaderData == null) {
+            return null;
+        }
+        return getSubmitPdu(scAddress, destinationAddress,
+                data, smsHeaderData, statusReportRequested);
+    }
+
+    /**
+     * Get an SMS-SUBMIT PDU for a destination address and a message
+     * which are sent to a specified application port
+     *
+     * @param scAddress Service Centre address.  Null means use default.
+     * @return a <code>SubmitPdu</code> containing the encoded SC
+     *         address, if applicable, and the encoded message.
+     *         Returns null on encode error.
+     */
+    public static SubmitPdu getSubmitPdu(String scAddress,
+            String destinationAddress, String message,
+            int destPort, boolean statusReportRequested) {
+
+        int language = getCurrentSysLanguage();
+        int singleId = -1;
+        int lockingId = -1;
+        int encoding = ENCODING_UNKNOWN;
+        TextEncodingDetails ted = new TextEncodingDetails();
+
+        if (encodeStringWithSpecialLang(message, language, ted)) {
+            if (ted.useLockingShift && ted.useSingleShift) {
+                encoding = ENCODING_7BIT_LOCKING_SINGLE;
+                singleId = lockingId = language;
+            } else if (ted.useLockingShift) {
+                encoding = ENCODING_7BIT_LOCKING;
+                lockingId = language;
+            } else if (ted.useSingleShift) {
+                encoding = ENCODING_7BIT_SINGLE;
+                singleId = language;
+            } else {
+                encoding = ENCODING_7BIT;
+                language = -1;
+            }
+        } else {
+            encoding = ENCODING_16BIT;
+        }
+
+        byte[] smsHeaderData = SmsHeader.getSubmitPduHeaderWithLang(destPort, singleId, lockingId);
+
+        return getSubmitPduWithLang(scAddress, destinationAddress,
+                message, statusReportRequested, smsHeaderData, encoding, language);
+    }
+
+    /**
+     * Get an SMS-SUBMIT PDU for a data message with data header
+     * to a destination address
+     *
+     * @param scAddress Service Centre address. null == use default
+     * @param destinationAddress the address of the destination for the message
+     * @param data the data for the message
+     * @param header the pdu header for the message
+     * @return a <code>SubmitPdu</code> containing the encoded SC
+     *         address, if applicable, and the encoded message.
+     *         Returns null on encode error.
+     */
+    public static SubmitPdu getSubmitPdu(String scAddress,
+            String destinationAddress, byte[] data, byte[] smsHeaderData,
+            boolean statusReportRequested) {
+
+        if ((data.length + smsHeaderData.length + 1) > MAX_USER_DATA_BYTES) {
+            Rlog.e(LOG_TAG, "SMS data message may only contain "
+                    + (MAX_USER_DATA_BYTES - smsHeaderData.length - 1) + " bytes");
+            return null;
+        }
+
+        SubmitPdu ret = new SubmitPdu();
+        ByteArrayOutputStream bo = getSubmitPduHead(
+                scAddress, destinationAddress, (byte) 0x41, // MTI = SMS-SUBMIT,
+                                                            // TP-UDHI = true
+                statusReportRequested, ret);
+
+        // TP-Data-Coding-Scheme
+        // No class, 8 bit data
+        bo.write(0x04);
+
+        // (no TP-Validity-Period)
+
+        // Total size
+        bo.write(data.length + smsHeaderData.length + 1);
+
+        // User data header
+        bo.write(smsHeaderData.length);
+        bo.write(smsHeaderData, 0, smsHeaderData.length);
+
+        // User data
+        bo.write(data, 0, data.length);
+
+        ret.encodedMessage = bo.toByteArray();
+        return ret;
+    }
+
+    /**
+     * Get an SMS-SUBMIT PDU for a destination address and a message using the
+     * specified encoding.
+     *
+     * @param scAddress Service Centre address.  Null means use default.
+     * @param encoding Encoding defined by constants in android.telephony.SmsMessage.ENCODING_*
+     * @return a <code>SubmitPdu</code> containing the encoded SC
+     *         address, if applicable, and the encoded message.
+     *         Returns null on encode error.
+     * @hide
+     */
+    public static SubmitPdu getSubmitPduWithLang(String scAddress,
+            String destinationAddress, String message,
+            boolean statusReportRequested, byte[] header, int encoding, int language) {
+
+        Rlog.d(LOG_TAG, "SmsMessage: get submit pdu");
+        // Perform null parameter checks.
+        if (message == null || destinationAddress == null) {
+            return null;
+        }
+
+        SubmitPdu ret = new SubmitPdu();
+        // MTI = SMS-SUBMIT, UDHI = header != null
+        Rlog.d(LOG_TAG, "SmsMessage: UDHI = " + (header != null));
+        byte mtiByte = (byte) (0x01 | (header != null ? 0x40 : 0x00));
+        ByteArrayOutputStream bo = getSubmitPduHead(
+                scAddress, destinationAddress, mtiByte,
+                statusReportRequested, ret);
+        // User Data (and length)
+        byte[] userData;
+        if (encoding == ENCODING_UNKNOWN) {
+            // First, try encoding it with the GSM alphabet
+            encoding = ENCODING_7BIT;
+        }
+        try {
+            Rlog.d(LOG_TAG, "Get SubmitPdu with Lang " + encoding + " " + language);
+            if (encoding == ENCODING_7BIT) {
+                //userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header);
+                userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header, 0, 0);
+            } else if (language > 0 && encoding != ENCODING_16BIT) {
+                if (encoding == ENCODING_7BIT_LOCKING) {
+                    //userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header,
+                    //        -1, language);
+                    userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header, 0,
+                            language);
+                } else if (encoding == ENCODING_7BIT_SINGLE) {
+                    //userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header,
+                    //        language, -1);
+                    userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header,
+                            language, 0);
+                } else if (encoding == ENCODING_7BIT_LOCKING_SINGLE) {
+                    userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header,
+                            language, language);
+                } else {
+                    //userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header);
+                    userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header, 0, 0);
+                }
+                encoding = ENCODING_7BIT;
+            } else { // assume UCS-2
+                try {
+                    userData = encodeUCS2(message, header);
+                } catch (UnsupportedEncodingException uex) {
+                    Rlog.e(LOG_TAG,
+                            "Implausible UnsupportedEncodingException ",
+                            uex);
+                    return null;
+                }
+            }
+        } catch (EncodeException ex) {
+            // Encoding to the 7-bit alphabet failed. Let's see if we can
+            // send it as a UCS-2 encoded message
+            try {
+                userData = encodeUCS2(message, header);
+                encoding = ENCODING_16BIT;
+            } catch (UnsupportedEncodingException uex) {
+                Rlog.e(LOG_TAG,
+                        "Implausible UnsupportedEncodingException ",
+                        uex);
+                return null;
+            }
+        }
+
+        if (encoding == ENCODING_7BIT) {
+            if ((0xff & userData[0]) > MAX_USER_DATA_SEPTETS) {
+                // Message too long
+                return null;
+            }
+            // TP-Data-Coding-Scheme
+            // Default encoding, uncompressed
+            // To test writing messages to the SIM card, change this value 0x00
+            // to 0x12, which means "bits 1 and 0 contain message class, and the
+            // class is 2". Note that this takes effect for the sender. In other
+            // words, messages sent by the phone with this change will end up on
+            // the receiver's SIM card. You can then send messages to yourself
+            // (on a phone with this change) and they'll end up on the SIM card.
+            bo.write(0x00);
+        } else { // assume UCS-2
+            if ((0xff & userData[0]) > MAX_USER_DATA_BYTES) {
+                // Message too long
+                return null;
+            }
+            // TP-Data-Coding-Scheme
+            // Class 3, UCS-2 encoding, uncompressed
+
+            // modified by mtk80611
+            // bo.write(0x0b);
+            bo.write(0x08);
+            // modified by mtk80611
+        }
+
+        // (no TP-Validity-Period)
+        bo.write(userData, 0, userData.length);
+        ret.encodedMessage = bo.toByteArray();
+        return ret;
+    }
+
+    public static DeliverPdu getDeliverPduWithLang(String scAddress, String originalAddress,
+            String message, byte[] header, long timestamp, int encoding, int language) {
+        Rlog.d(LOG_TAG, "SmsMessage: get deliver pdu");
+
+        if (message == null || originalAddress == null) {
+            return null;
+        }
+
+        DeliverPdu ret = new DeliverPdu();
+
+        Rlog.d(LOG_TAG, "SmsMessage: UDHI = " + (header != null));
+        byte mtiByte = (byte) (0x00 | (header != null ? 0x40 : 0x00));
+
+        ByteArrayOutputStream bo = getDeliverPduHead(scAddress, originalAddress, mtiByte, ret);
+
+        // encode User Data (and length)
+        byte[] userData;
+        if (encoding == ENCODING_UNKNOWN) {
+            // First, try encoding it with the GSM alphabet
+            encoding = ENCODING_7BIT;
+        }
+        try {
+            Rlog.d(LOG_TAG, "Get SubmitPdu with Lang " + encoding + " " + language);
+            if (encoding == ENCODING_7BIT) {
+                //userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header);
+                userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header, 0, 0);
+            } else if (language > 0 && encoding != ENCODING_16BIT) {
+                if (encoding == ENCODING_7BIT_LOCKING) {
+                    //userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header, -1,
+                    //        language);
+                    userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header, 0,
+                            language);
+                } else if (encoding == ENCODING_7BIT_SINGLE) {
+                    //userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header,
+                    //        language, -1);
+                    userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header,
+                            language, 0);
+                } else if (encoding == ENCODING_7BIT_LOCKING_SINGLE) {
+                    userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header,
+                            language, language);
+                } else {
+                    //userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header);
+                    userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header, 0, 0);
+                }
+                encoding = ENCODING_7BIT;
+            } else { // assume UCS-2
+                try {
+                    userData = encodeUCS2(message, header);
+                } catch (UnsupportedEncodingException uex) {
+                    Rlog.e(LOG_TAG,
+                            "Implausible UnsupportedEncodingException ",
+                            uex);
+                    return null;
+                }
+            }
+        } catch (EncodeException ex) {
+            // Encoding to the 7-bit alphabet failed. Let's see if we can
+            // send it as a UCS-2 encoded message
+            try {
+                userData = encodeUCS2(message, header);
+                encoding = ENCODING_16BIT;
+            } catch (UnsupportedEncodingException uex) {
+                Rlog.e(LOG_TAG,
+                        "Implausible UnsupportedEncodingException ",
+                        uex);
+                return null;
+            }
+        }
+
+        if (userData != null && (0xff & userData[0]) > MAX_USER_DATA_SEPTETS) {
+            Rlog.d(LOG_TAG, "SmsMessage: message is too long");
+            return null;
+        }
+
+        // write dcs type
+        if (encoding == ENCODING_7BIT) {
+            bo.write(0x00);
+        } else { // assume UCS-2
+            bo.write(0x08);
+        }
+
+        // write timestamp
+        // Because we can't get invalid timestamp which indicate the message arrival service center,
+        // we just write 7 0x00 into the pdu
+
+        byte[] scts = parseSCTimestamp(timestamp);
+        if (scts != null) {
+            bo.write(scts, 0, scts.length);
+        } else {
+            for (int i = 0; i < 7; ++i) {
+                bo.write(0x00);
+            }
+        }
+
+        bo.write(userData, 0, userData.length);
+        ret.encodedMessage = bo.toByteArray();
+
+        return ret;
+    }
+
+    static private byte[] parseSCTimestamp(long millis) {
+        Time t = new Time(Time.TIMEZONE_UTC);
+        t.set(millis);
+
+        byte[] scts = new byte[7];
+        scts[0] = intToGsmBCDByte(t.year);
+        scts[1] = intToGsmBCDByte(t.month + 1);
+        scts[2] = intToGsmBCDByte(t.monthDay);
+        scts[3] = intToGsmBCDByte(t.hour);
+        scts[4] = intToGsmBCDByte(t.minute);
+        scts[5] = intToGsmBCDByte(t.second);
+        scts[6] = intToGsmBCDByte(0);
+
+        return scts;
+    }
+
+    static private byte intToGsmBCDByte(int value) {
+        if (value < 0) {
+            Rlog.d(LOG_TAG, "[time invalid value: " + value);
+            return (byte) 0;
+        }
+        value %= 100;
+        Rlog.d(LOG_TAG, "[time value: " + value);
+
+        // byte b = (byte)(((value / 10) << 4) + (value % 10));
+        byte b = (byte) (((value / 10) & 0x0f) | (((value % 10) << 4) & 0xf0));
+        Rlog.d(LOG_TAG, "[time bcd value: " + b);
+        return b;
+    }
+
+    private static ByteArrayOutputStream getDeliverPduHead(
+            String scAddress, String originalAddress, byte mtiByte, DeliverPdu ret) {
+
+        ByteArrayOutputStream bo = new ByteArrayOutputStream(
+                MAX_USER_DATA_BYTES + 40);
+
+        if (scAddress == null) {
+            ret.encodedScAddress = null;
+        } else {
+            ret.encodedScAddress = PhoneNumberUtils.networkPortionToCalledPartyBCDWithLength(
+                    scAddress);
+        }
+
+        // write mti byte
+        bo.write(mtiByte);
+
+        // write original bytes
+        byte[] oaBytes;
+        oaBytes = PhoneNumberUtils.networkPortionToCalledPartyBCD(originalAddress);
+        if (oaBytes != null) {
+            bo.write((oaBytes.length - 1) * 2
+                    - ((oaBytes[oaBytes.length - 1] & 0xf0) == 0xf0 ? 1 : 0));
+            bo.write(oaBytes, 0, oaBytes.length);
+        } else {
+            Rlog.d(LOG_TAG, "write a empty address for deliver pdu");
+            bo.write(0);
+            bo.write(PhoneNumberUtils.TOA_International);
+        }
+
+        // write PID
+        bo.write(0);
+
+        return bo;
+    }
+
+    private static boolean encodeStringWithSpecialLang(
+            CharSequence msgBody,
+            int language,
+            TextEncodingDetails ted) {
+
+        int septets;
+
+        //1st, try default GSM
+        //septets = GsmAlphabet.countGsmSeptetsWithTable(
+        //        msgBody, -1, -1);
+        septets = GsmAlphabet.countGsmSeptetsUsingTables(
+                msgBody, true, 0, 0);
+        if (septets != -1) {
+
+            ted.codeUnitCount = septets;
+            if (septets > MAX_USER_DATA_SEPTETS) {
+                ted.msgCount = (septets / MAX_USER_DATA_SEPTETS_WITH_HEADER) + 1;
+                ted.codeUnitsRemaining = MAX_USER_DATA_SEPTETS_WITH_HEADER
+                        - (septets % MAX_USER_DATA_SEPTETS_WITH_HEADER);
+            } else {
+                ted.msgCount = 1;
+                ted.codeUnitsRemaining = MAX_USER_DATA_SEPTETS - septets;
+            }
+            ted.codeUnitSize = ENCODING_7BIT;
+            ted.shiftLangId = -1;
+            Rlog.d(LOG_TAG, "Try Default: " + language + " " + ted);
+            return true;
+        }
+
+        //2nd, try locking shift
+        //septets = GsmAlphabet.countGsmSeptetsWithTable(
+        //        msgBody, -1, language);
+        septets = GsmAlphabet.countGsmSeptetsUsingTables(
+                msgBody, true, 0, language);
+        if (septets != -1) {
+
+            int headerElt[] = {SmsHeader.ELT_ID_NATIONAL_LANGUAGE_LOCKING_SHIFT, 0xffff};
+            int maxLength = computeRemainUserDataLength(true, headerElt);
+
+            ted.codeUnitCount = septets;
+            if (septets > maxLength) {
+                headerElt[1] = SmsHeader.ELT_ID_CONCATENATED_8_BIT_REFERENCE;
+                maxLength = computeRemainUserDataLength(true, headerElt);
+
+                ted.msgCount = (septets / maxLength) + 1;
+                ted.codeUnitsRemaining = maxLength - (septets % maxLength);
+            } else {
+                ted.msgCount = 1;
+                ted.codeUnitsRemaining = maxLength - septets;
+            }
+            ted.codeUnitSize = ENCODING_7BIT;
+            ted.useLockingShift = true;
+            ted.shiftLangId = language;
+            Rlog.d(LOG_TAG, "Try Locking Shift: " + language + " " + ted);
+            return true;
+        }
+
+        //3rd, try single shift
+        //septets = GsmAlphabet.countGsmSeptetsWithTable(
+        //        msgBody, language, -1);
+        septets = GsmAlphabet.countGsmSeptetsUsingTables(
+                msgBody, true, language, 0);
+        if (septets != -1) {
+
+            int headerElt[] = {SmsHeader.ELT_ID_NATIONAL_LANGUAGE_SINGLE_SHIFT, 0xffff};
+            int maxLength = computeRemainUserDataLength(true, headerElt);
+
+            ted.codeUnitCount = septets;
+            if (septets > maxLength) {
+                headerElt[1] = SmsHeader.ELT_ID_CONCATENATED_8_BIT_REFERENCE;
+                maxLength = computeRemainUserDataLength(true, headerElt);
+
+                ted.msgCount = (septets / maxLength) + 1;
+                ted.codeUnitsRemaining = maxLength - (septets % maxLength);
+            } else {
+                ted.msgCount = 1;
+                ted.codeUnitsRemaining = maxLength - septets;
+            }
+            ted.codeUnitSize = ENCODING_7BIT;
+            ted.useSingleShift = true;
+            ted.shiftLangId = language;
+            Rlog.d(LOG_TAG, "Try Single Shift: " + language + " " + ted);
+            return true;
+        }
+
+        //4th, try locking and single shift
+        //septets = GsmAlphabet.countGsmSeptetsWithTable(
+        //        msgBody, language, language);
+        septets = GsmAlphabet.countGsmSeptetsUsingTables(
+                msgBody, true, language, language);
+        if (septets != -1) {
+            int headerElt[] = {
+                    SmsHeader.ELT_ID_NATIONAL_LANGUAGE_LOCKING_SHIFT,
+                    SmsHeader.ELT_ID_NATIONAL_LANGUAGE_SINGLE_SHIFT,
+                    0xffff};
+            int maxLength = computeRemainUserDataLength(true, headerElt);
+
+            ted.codeUnitCount = septets;
+            if (septets > maxLength) {
+                headerElt[2] = SmsHeader.ELT_ID_CONCATENATED_8_BIT_REFERENCE;
+                maxLength = computeRemainUserDataLength(true, headerElt);
+
+                ted.msgCount = (septets / maxLength) + 1;
+                ted.codeUnitsRemaining = maxLength - (septets % maxLength);
+            } else {
+                ted.msgCount = 1;
+                ted.codeUnitsRemaining = maxLength - septets;
+            }
+            ted.codeUnitSize = ENCODING_7BIT;
+            ted.useLockingShift = true;
+            ted.useSingleShift = true;
+            ted.shiftLangId = language;
+            Rlog.d(LOG_TAG, "Try Locking & Single Shift: " + language + " " + ted);
+            return true;
+        }
+
+        Rlog.d(LOG_TAG, "Use UCS2" + language + " " + ted);
+        return false;
+    }
+
+    private static int getCurrentSysLanguage() {
+        int ret;
+        String language;
+
+        language = SystemProperties.get("persist.sys.language", null);
+        if (language == null) {
+            language = SystemProperties.get("ro.product.locale.language", null);
+        }
+
+        if (language.equals("tr")) {
+            // ret = GsmAlphabet.SHIFT_ID_TURKISH;
+            ret = -1;
+        } else {
+            ret = -1;
+        }
+
+        return ret;
+    }
+
+    public static int computeRemainUserDataLength(boolean inSeptets, int headerElt[]) {
+        int headerBytes = 0;
+        int count;
+        for (int i = 0; i < headerElt.length; i++) {
+            switch (headerElt[i]) {
+                case SmsHeader.ELT_ID_CONCATENATED_8_BIT_REFERENCE:
+                    headerBytes += SmsHeader.CONCATENATED_8_BIT_REFERENCE_LENGTH;
+                    break;
+                case SmsHeader.ELT_ID_NATIONAL_LANGUAGE_SINGLE_SHIFT:
+                    headerBytes += SmsHeader.NATIONAL_LANGUAGE_SINGLE_SHIFT_LENGTH;
+                    break;
+                case SmsHeader.ELT_ID_NATIONAL_LANGUAGE_LOCKING_SHIFT:
+                    headerBytes += SmsHeader.NATIONAL_LANGUAGE_LOCKING_SHIFT_LENGTH;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        if (headerBytes != 0) {
+            headerBytes++; // header length
+        }
+
+        count = MAX_USER_DATA_BYTES - headerBytes;
+        if (inSeptets) {
+            count = count * 8 / 7;
+        }
+
+        //Log.d(LOG_TAG, "computeRemainUserDataLength: inSeptets: "+ inSeptets +
+        //        " , max: "+ count + " header:" + headerBytes);
+
+        return count;
+    }
+
+    // MTK-START [ALPS00094531] Orange feature SMS Encoding Type Setting by mtk80589 in 2011.11.22
+    /**
+     * Calculate the number of septets needed to encode the message.
+     *
+     * @param msgBody the message to encode
+     * @param use7bitOnly ignore (but still count) illegal characters if true
+     * @param encodingType text encoding type(7-bit, 16-bit or automatic)
+     * @return TextEncodingDetails
+     */
+    public static TextEncodingDetails calculateLength(CharSequence msgBody,
+            boolean use7bitOnly, int encodingType) {
+        CharSequence newMsgBody = null;
+        Resources r = Resources.getSystem();
+        if (r.getBoolean(com.android.internal.R.bool.config_sms_force_7bit_encoding)) {
+            newMsgBody  = Sms7BitEncodingTranslator.translate(msgBody);
+        }
+        if (TextUtils.isEmpty(newMsgBody)) {
+            newMsgBody = msgBody;
+        }
+        TextEncodingDetails ted = GsmAlphabet.countGsmSeptets(newMsgBody, use7bitOnly);
+
+        if (encodingType == ENCODING_16BIT) {
+            Rlog.d(LOG_TAG, "input mode is unicode");
+            ted = null;
+        }
+        if (ted == null) {
+            Rlog.d(LOG_TAG, "7-bit encoding fail");
+            return SmsMessageBase.calcUnicodeEncodingDetails(newMsgBody);
+        }
+        return ted;
+    }
+    // MTK-END [ALPS00094531] Orange feature SMS Encoding Type Setting by mtk80589 in 2011.11.22
+
+    /**
+     * Get an SMS-SUBMIT PDU for a destination address and a message using the
+     * specified encoding.
+     *
+     * @param scAddress Service Centre address.  Null means use default.
+     * @param encoding Encoding defined by constants in android.telephony.SmsMessage.ENCODING_*
+     * @param languageTable
+     * @param languageShiftTable
+     * @return a <code>SubmitPdu</code> containing the encoded SC
+     *         address, if applicable, and the encoded message.
+     *         Returns null on encode error.
+     * @hide
+     */
+    public static SubmitPdu getSubmitPdu(String scAddress,
+            String destinationAddress, String message,
+            boolean statusReportRequested, byte[] header, int encoding,
+            int languageTable, int languageShiftTable, int validityPeriod) {
+
+        // Perform null parameter checks.
+        if (message == null || destinationAddress == null) {
+            return null;
+        }
+
+        if (encoding == ENCODING_UNKNOWN) {
+            // Find the best encoding to use
+            TextEncodingDetails ted = calculateLength(message, false);
+            encoding = ted.codeUnitSize;
+            languageTable = ted.languageTable;
+            languageShiftTable = ted.languageShiftTable;
+
+            if (encoding == ENCODING_7BIT && (languageTable != 0 || languageShiftTable != 0)) {
+                if (header != null) {
+                    SmsHeader smsHeader = SmsHeader.fromByteArray(header);
+                    if (smsHeader.languageTable != languageTable
+                            || smsHeader.languageShiftTable != languageShiftTable) {
+                        Rlog.w(LOG_TAG, "Updating language table in SMS header: "
+                                + smsHeader.languageTable + " -> " + languageTable + ", "
+                                + smsHeader.languageShiftTable + " -> " + languageShiftTable);
+                        smsHeader.languageTable = languageTable;
+                        smsHeader.languageShiftTable = languageShiftTable;
+                        header = SmsHeader.toByteArray(smsHeader);
+                    }
+                } else {
+                    SmsHeader smsHeader = new SmsHeader();
+                    smsHeader.languageTable = languageTable;
+                    smsHeader.languageShiftTable = languageShiftTable;
+                    header = SmsHeader.toByteArray(smsHeader);
+                }
+            }
+        }
+
+        SubmitPdu ret = new SubmitPdu();
+        // MTI = SMS-SUBMIT, UDHI = header != null
+        byte mtiByte = (byte) (0x01 | (header != null ? 0x40 : 0x00));
+        if (validityPeriod >= 0 && validityPeriod <= 255) {
+            mtiByte |= 0x10;
+        } else {
+            Rlog.d(LOG_TAG, "invalid VP: " + validityPeriod);
+        }
+        ByteArrayOutputStream bo = getSubmitPduHead(
+                scAddress, destinationAddress, mtiByte,
+                statusReportRequested, ret);
+
+        // User Data (and length)
+        byte[] userData;
+        try {
+            if (encoding == ENCODING_7BIT) {
+                userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message, header,
+                        languageTable, languageShiftTable);
+            } else { // assume UCS-2
+                try {
+                    userData = encodeUCS2(message, header);
+                } catch (UnsupportedEncodingException uex) {
+                    Rlog.e(LOG_TAG,
+                            "Implausible UnsupportedEncodingException ",
+                            uex);
+                    return null;
+                }
+            }
+        } catch (EncodeException ex) {
+            // Encoding to the 7-bit alphabet failed. Let's see if we can
+            // send it as a UCS-2 encoded message
+            try {
+                userData = encodeUCS2(message, header);
+                encoding = ENCODING_16BIT;
+            } catch (UnsupportedEncodingException uex) {
+                Rlog.e(LOG_TAG,
+                        "Implausible UnsupportedEncodingException ",
+                        uex);
+                return null;
+            }
+        }
+
+        if (encoding == ENCODING_7BIT) {
+            if ((0xff & userData[0]) > MAX_USER_DATA_SEPTETS) {
+                // Message too long
+                // MTK-START [mtk04070][111223][ALPS00106134]Merge to ICS 4.0.3
+                Rlog.e(LOG_TAG, "Message too long (" + (0xff & userData[0]) + " septets)");
+                // MTK-END [mtk04070][111223][ALPS00106134]Merge to ICS 4.0.3
+                return null;
+            }
+            // TP-Data-Coding-Scheme
+            // Default encoding, uncompressed
+            // To test writing messages to the SIM card, change this value 0x00
+            // to 0x12, which means "bits 1 and 0 contain message class, and the
+            // class is 2". Note that this takes effect for the sender. In other
+            // words, messages sent by the phone with this change will end up on
+            // the receiver's SIM card. You can then send messages to yourself
+            // (on a phone with this change) and they'll end up on the SIM card.
+            bo.write(0x00);
+        } else { // assume UCS-2
+            if ((0xff & userData[0]) > MAX_USER_DATA_BYTES) {
+                // Message too long
+                // MTK-START [mtk04070][111223][ALPS00106134]Merge to ICS 4.0.3
+                Rlog.e(LOG_TAG, "Message too long (" + (0xff & userData[0]) + " bytes)");
+                // MTK-END [mtk04070][111223][ALPS00106134]Merge to ICS 4.0.3
+                return null;
+            }
+            // TP-Data-Coding-Scheme
+            // UCS-2 encoding, uncompressed
+            bo.write(0x08);
+        }
+
+        if (validityPeriod >= 0 && validityPeriod <= 255) {
+            Rlog.d(LOG_TAG, "write validity period into pdu: " + validityPeriod);
+            bo.write(validityPeriod);
+        }
+
+        // (no TP-Validity-Period)
+        bo.write(userData, 0, userData.length);
+        ret.encodedMessage = bo.toByteArray();
+        return ret;
+    }
+
+    /**
+     * Get the current encoding type, ex. 7 bit or UCS2.
+     * App can use the encoding type to check if all Google emoticons content. It has bug while
+     * the emoticons codec cross 2 segments, it will have the broken content and shows to end user.
+     * Therefore, app can check if the encoding type is equal to 16bit. If it is equal to 16 bit,
+     * app is able to merge all content and display as correct emoticons.
+     *
+     * @return ENCODING_UNKNOWN, ENCODING_7BIT, ENCODING_8BIT or ENCODING_16BIT
+     */
+    public int getEncodingType() {
+        return mEncodingType;
+    }
+    // MTK-END
 }

@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,15 +21,26 @@
 
 package com.android.internal.telephony;
 
+import android.os.AsyncResult;
+import android.os.Handler;
+import android.os.Message;
+
 import com.android.internal.telephony.cdma.CdmaSmsBroadcastConfigInfo;
 import com.android.internal.telephony.dataconnection.DataProfile;
 import com.android.internal.telephony.gsm.SmsBroadcastConfigInfo;
 import com.android.internal.telephony.RadioCapability;
 import com.android.internal.telephony.uicc.IccCardStatus;
 
-import android.os.Message;
-import android.os.Handler;
+import com.mediatek.internal.telephony.FemtoCellInfo;
 
+import com.mediatek.common.telephony.gsm.PBEntry;
+// MTK-START, SMS part
+import android.telephony.SmsParameters;
+// MTK-END
+
+/// M: CC072: Add Customer proprietary-IMS RIL interface. @{
+import com.mediatek.internal.telephony.SrvccCallContext;
+/// @}
 
 /**
  * {@hide}
@@ -65,6 +81,9 @@ public interface CommandsInterface {
     static final int CF_REASON_NOT_REACHABLE    = 3;
     static final int CF_REASON_ALL              = 4;
     static final int CF_REASON_ALL_CONDITIONAL  = 5;
+    //MTK-START [MMTelSS]
+    static final int CF_REASON_NOT_REGISTERED   = 6;
+    //MTK-END [MMTelSS]
 
     // Used for call barring methods below
     static final String CB_FACILITY_BAOC         = "AO";
@@ -90,7 +109,16 @@ public interface CommandsInterface {
     static final int SERVICE_CLASS_DATA_ASYNC = (1 << 5);
     static final int SERVICE_CLASS_PACKET   = (1 << 6);
     static final int SERVICE_CLASS_PAD      = (1 << 7);
-    static final int SERVICE_CLASS_MAX      = (1 << 7); // Max SERVICE_CLASS value
+    static final int SERVICE_CLASS_MAX      = (1 << 9); // Max SERVICE_CLASS value
+    /* M: SS part */
+    //MTK-START [mtk04070][111118][ALPS00093395]MTK added
+    static final int SERVICE_CLASS_LINE2    = (1 << 8); // Add for Line2
+    /**
+     * SERVICE_CLASS_VIDEO Service Supplementary Information codes for Video Telephony support.
+     */
+    static final int SERVICE_CLASS_VIDEO    = (1 << 9);
+    //MTK-END [mtk04070][111118][ALPS00093395]MTK added
+    /* M: SS part end */
 
     // Numeric representation of string values returned
     // by messages sent to setOnUSSD handler
@@ -100,6 +128,14 @@ public interface CommandsInterface {
     static final int USSD_MODE_LOCAL_CLIENT  = 3;
     static final int USSD_MODE_NOT_SUPPORTED = 4;
     static final int USSD_MODE_NW_TIMEOUT    = 5;
+    /* M: SS part */
+    //MTK-START [mtk04070][111118][ALPS00093395]MTK added
+    static final int USSD_SESSION_END               = 2;
+    static final int USSD_HANDLED_BY_STK            = 3;
+    static final int USSD_OPERATION_NOT_SUPPORTED   = 4;
+    static final int USSD_NETWORK_TIMEOUT           = 5;
+    //MTK-END [mtk04070][111118][ALPS00093395]MTK added
+    /* M: SS part end */
 
     // GSM SMS fail cause for acknowledgeLastIncomingSMS. From TS 23.040, 9.2.3.22.
     static final int GSM_SMS_FAIL_CAUSE_MEMORY_CAPACITY_EXCEEDED    = 0xD3;
@@ -112,6 +148,21 @@ public interface CommandsInterface {
     static final int CDMA_SMS_FAIL_CAUSE_RESOURCE_SHORTAGE          = 35;
     static final int CDMA_SMS_FAIL_CAUSE_OTHER_TERMINAL_PROBLEM     = 39;
     static final int CDMA_SMS_FAIL_CAUSE_ENCODING_PROBLEM           = 96;
+
+    //MTK-START [mtk04070][111118][ALPS00093395]MTK added
+    //MTK AT CMD +ESMLCK
+    static final int CAT_NETWOEK                = 0;
+    static final int CAT_NETOWRK_SUBSET         = 1;
+    static final int CAT_SERVICE_PROVIDER       = 2;
+    static final int CAT_CORPORATE              = 3;
+    static final int CAT_SIM                    = 4;
+
+    static final int OP_UNLOCK                  = 0;
+    static final int OP_LOCK                    = 1;
+    static final int OP_ADD                     = 2;
+    static final int OP_REMOVE                  = 3;
+    static final int OP_PERMANENT_UNLOCK        = 4;
+    //MTK-END [mtk04070][111118][ALPS00093395]MTK added
 
     //***** Methods
     RadioState getRadioState();
@@ -346,6 +397,45 @@ public interface CommandsInterface {
     void unSetOnCallRing(Handler h);
 
     /**
+     * Sets the handler for event download of call notifications.
+     * Unlike the register* methods, there's only one notification handler
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void setOnStkEvdlCall(Handler h, int what, Object obj);
+    void unSetOnStkEvdlCall(Handler h);
+
+    /**
+     * Sets the handler for event download of call notifications.
+     * Unlike the register* methods, there's only one notification handler
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void setOnStkSetupMenuReset(Handler h, int what, Object obj);
+    void unSetOnStkSetupMenuReset(Handler h);
+
+    /**
+     * Sets the handler for call ccontrol response message.
+     * Unlike the register* methods, there's only one notification handler
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void setOnStkCallCtrl(Handler h, int what, Object obj);
+    /**
+     * Unsets the handler for call ccontrol response message.
+     * Unlike the register* methods, there's only one notification handler
+     *
+     * @param h Handler for notification message.
+     */
+    void unSetOnStkCallCtrl(Handler h);
+
+    /**
      * Sets the handler for RESTRICTED_STATE changed notification,
      * eg, for Domain Specific Access Control
      * unlike the register* methods, there's only one signal strength handler
@@ -389,7 +479,18 @@ public interface CommandsInterface {
      */
     void setOnCatProactiveCmd(Handler h, int what, Object obj);
     void unSetOnCatProactiveCmd(Handler h);
-
+    /// M: BIP {
+    /**
+     * Sets the handler for Proactive Commands for CAT.
+     * Unlike the register* methods, there's only one notification handler
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void setOnBipProactiveCmd(Handler h, int what, Object obj);
+    void unSetOnBipProactiveCmd(Handler h);
+    /// M: BIP }
     /**
      * Sets the handler for Event Notifications for CAT.
      * Unlike the register* methods, there's only one notification handler
@@ -773,7 +874,7 @@ public interface CommandsInterface {
 
     void changeBarringPassword(String facility, String oldPwd, String newPwd, Message result);
 
-    void supplyNetworkDepersonalization(String netpin, String type, Message result);
+    void supplyNetworkDepersonalization(String netpin, Message result);
 
     /**
      *  returned message
@@ -1156,6 +1257,10 @@ public interface CommandsInterface {
 
     void setRadioPower(boolean on, Message response);
 
+    //MTK-START [mtk06800] modem power on/off
+    void setModemPower(boolean power, Message response);
+    //MTK-END [mtk06800] modem power on/off
+
     void acknowledgeLastIncomingGsmSms(boolean success, int cause, Message response);
 
     void acknowledgeLastIncomingCdmaSms(boolean success, int cause, Message response);
@@ -1263,6 +1368,10 @@ public interface CommandsInterface {
 
     void setNetworkSelectionModeManual(String operatorNumeric, Message response);
 
+    void setNetworkSelectionModeManualWithAct(String operatorNumeric, String act, Message response);
+
+    void setNetworkSelectionModeSemiAutomatic(String operatorNumeric, String act, Message response);
+
     /**
      * Queries whether the current network selection mode is automatic
      * or manual
@@ -1279,6 +1388,13 @@ public interface CommandsInterface {
      * ((AsyncResult)response.obj).result  is a List of NetworkInfo objects
      */
     void getAvailableNetworks(Message response);
+
+    /**
+     * Cancel querie the currently available networks
+     *
+     * ((AsyncResult)response.obj).result  is a List of NetworkInfo objects
+     */
+    void cancelAvailableNetworks(Message response);
 
     void getBasebandVersion (Message response);
 
@@ -1335,6 +1451,11 @@ public interface CommandsInterface {
         int serviceClass, String appId, Message response);
 
     void sendUSSD (String ussdString, Message response);
+
+    /* M: SS part */
+    ///M: For query CNAP
+    void sendCNAPSS(String cnapssString, Message response);
+    /* M: SS part end */
 
     /**
      * Cancels a pending USSD session if one exists.
@@ -1434,6 +1555,14 @@ public interface CommandsInterface {
     void unSetOnUnsolOemHookRaw(Handler h);
 
     /**
+     * Indicates to the vendor ril that call connected and disconnected
+     * event download will be handled by AP.
+     * @param enabled '0' handles event download by AP; '1' handles event download by MODEM
+     * @param response callback message
+     */
+    void setStkEvdlCallByAP(int enabled, Message response);
+
+    /**
      * Send TERMINAL RESPONSE to the SIM, after processing a proactive command
      * sent by the SIM.
      *
@@ -1477,7 +1606,7 @@ public interface CommandsInterface {
      * @param accept   true if the call is to be accepted, false otherwise.
      * @param response Callback message
      */
-    public void handleCallSetupRequestFromSim(boolean accept, Message response);
+    public void handleCallSetupRequestFromSim(boolean accept, int resCode, Message response);
 
     /**
      * Activate or deactivate cell broadcast SMS for GSM.
@@ -1683,12 +1812,6 @@ public interface CommandsInterface {
     public int getLteOnCdmaMode();
 
     /**
-     * Return if the current radio is LTE on GSM
-     * @hide
-     */
-    public int getLteOnGsmMode();
-
-    /**
      * Request the ISIM application on the UICC to perform the AKA
      * challenge/response algorithm for IMS authentication. The nonce string
      * and challenge response are Base64 encoded Strings.
@@ -1805,16 +1928,6 @@ public interface CommandsInterface {
     public void iccOpenLogicalChannel(String AID, Message response);
 
     /**
-     * Open a logical channel to the SIM.
-     *
-     * @param p2 P2 parameter
-     * @param AID application id.
-     * @param response Callback message. response.obj will be an int [1]
-                element [0] set to the id of the logical channel.
-     */
-    public void iccOpenLogicalChannel(String AID, byte p2, Message response);
-
-    /**
      * Close a previously opened logical channel to the SIM.
      *
      * Input parameters equivalent to TS 27.007 AT+CCHC command.
@@ -1861,13 +1974,6 @@ public interface CommandsInterface {
      */
     public void iccTransmitApduBasicChannel(int cla, int instruction, int p1, int p2,
             int p3, String data, Message response);
-
-    /**
-     * Get ATR (Answer To Reset; as per ISO/IEC 7816-4) from SIM card
-     *
-     * @param response Callback message
-     */
-    public void getAtr(Message response);
 
     /**
      * Read one of the NV items defined in {@link RadioNVItems} / {@code ril_nv_items.h}.
@@ -1924,15 +2030,20 @@ public interface CommandsInterface {
    /**
      * Sets user selected subscription at Modem.
      *
+     * @param slotId
+     *          Slot.
      * @param appIndex
      *          Application index in the card.
-     * @param activate
-     *          Whether to activate or deactivate the subscription
+     * @param subId
+     *          Indicates subscription 0 or subscription 1.
+     * @param subStatus
+     *          Activation status, 1 = activate and 0 = deactivate.
      * @param result
      *          Callback message contains the information of SUCCESS/FAILURE.
      */
     // FIXME Update the doc and consider modifying the request to make more generic.
-    public void setUiccSubscription(int appIndex, boolean activate, Message result);
+    public void setUiccSubscription(int slotId, int appIndex, int subId, int subStatus,
+            Message result);
 
     /**
      * Tells the modem if data is allowed or not.
@@ -2037,35 +2148,838 @@ public interface CommandsInterface {
      */
     public void getModemActivityInfo(Message result);
 
+    /// M: CC010: Add RIL interface @{
+    public void registerForCipherIndication(Handler h, int what, Object obj);
+    public void unregisterForCipherIndication(Handler h);
+    public void registerForCallForwardingInfo(Handler h, int what, Object obj);
+    public void unregisterForCallForwardingInfo(Handler h);
+    public void setOnCallRelatedSuppSvc(Handler h, int what, Object obj);
+    public void unSetOnCallRelatedSuppSvc(Handler h);
+
+    /**
+     * used to register to +EAIC URC for call state change.
+     *
+     * msg.obj is an AsyncResult
+     * ar.result is a String[]
+     */
+    public void setOnIncomingCallIndication(Handler h, int what, Object obj);
+    public void unsetOnIncomingCallIndication(Handler h);
+
+    //obsolete
+    /*
+    public void setCnapNotify(Handler h, int what, Object obj);
+    public void unSetCnapNotify(Handler h);
+    */
+    /// @}
+
+    /// M: CC077: 2/3G CAPABILITY_HIGH_DEF_AUDIO @{
+    void setOnSpeechCodecInfo(Handler h, int what, Object obj);
+    void unSetOnSpeechCodecInfo(Handler h);
+    /// @}
+
+    /// M: CC010: Add RIL interface @{
+    /**
+     *  ar.exception carries exception on failure
+     *  ar.userObject contains the orignal value of result.obj
+     *  ar.result is null on success and failure
+     */
+    public void hangupAll(Message result);
+
     /**
      *
-     * Set MAX transmit power state
+     *  ar.exception carries exception on failure
+     *  ar.userObject contains the orignal value of result.obj
+     *  ar.result is null on success and failure
+     */
+    public void forceReleaseCall(int index, Message result);
+
+    /**
      *
-     * @param response Callback message contains the status from modem
+     *  ar.exception carries exception on failure
+     *  ar.userObject contains the orignal value of result.obj
+     *  ar.result is null on success and failure
      */
-     public void setMaxTransmitPower(int state, Message response);
+    public void setCallIndication(int mode, int callId, int seqNumber, Message result);
 
     /**
-     * Request to update the current local call hold state.
-     * @param lchStatus, true if call is in lch state
+     *  returned message
+     *  retMsg.obj = AsyncResult ar
+     *  ar.exception carries exception on failure
+     *  ar.userObject contains the orignal value of result.obj
+     *  ar.result is null on success and failure
+     *
+     * CLIR_DEFAULT     == on "use subscription default value"
+     * CLIR_SUPPRESSION == on "CLIR suppression" (allow CLI presentation)
+     * CLIR_INVOCATION  == on "CLIR invocation" (restrict CLI presentation)
      */
-    public void setLocalCallHold(boolean lchStatus);
+    public void emergencyDial(String address, int clirMode, UUSInfo uusInfo, Message result);
+
+    public void setEccServiceCategory(int serviceCategory);
+    /// @}
+
+    /// M: CC077: 2/3G CAPABILITY_HIGH_DEF_AUDIO @{
+    public void setSpeechCodecInfo(boolean enable, Message response);
+    /// @}
+
+    /// M: For 3G VT only @{
+    /**
+     * used to register to +EVTSTATUS URC for VT status.
+     *
+     * msg.obj is an AsyncResult
+     * ar.result is a int[]
+     * String[0] is on_off
+     */
+    void registerForVtStatusInfo(Handler h, int what, Object obj);
+    void unregisterForVtStatusInfo(Handler h);
 
     /**
-     * @hide
-     * CM-specific: Ask the RIL about the presence of back-compat flags
+     * used to register to +CRING: VIDEO URC for MT VT call.
+     *
+     * msg.obj is an AsyncResult
      */
-    public boolean needsOldRilFeature(String feature);
+    void registerForVtRingInfo(Handler h, int what, Object obj);
+    void unregisterForVtRingInfo(Handler h);
+    /// @}
+
+    /// M: For 3G VT only @{
+    /**
+     *  returned message
+     *  retMsg.obj = AsyncResult ar
+     *  ar.exception carries exception on failure
+     *  ar.userObject contains the orignal value of result.obj
+     *  ar.result is null on success and failure
+     *
+     * CLIR_DEFAULT     == on "use subscription default value"
+     * CLIR_SUPPRESSION == on "CLIR suppression" (allow CLI presentation)
+     * CLIR_INVOCATION  == on "CLIR invocation" (restrict CLI presentation)
+     */
+    public void vtDial(String address, int clirMode, UUSInfo uusInfo, Message result);
 
     /**
-     * @hide
-     * samsung stk service implementation - set up registrant for sending
-     * sms send result from modem(RIL) to catService
+     *  ar.exception carries exception on failure
+     *  ar.userObject contains the orignal value of result.obj
+     *  ar.result is null on success and failure
      */
-    void setOnCatSendSmsResult(Handler h, int what, Object obj);
+    public void acceptVtCallWithVoiceOnly(int callId, Message result);
 
     /**
-     * @hide
+     *
+     *  ar.exception carries exception on failure
+     *  ar.userObject contains the orignal value of result.obj
+     *  ar.result is null on success and failure
      */
-    void unSetOnCatSendSmsResult(Handler h);
+    public void replaceVtCall(int index, Message result);
+    /// @}
+
+    /* M: SS part */
+    void changeBarringPassword(String facility, String oldPwd, String newPwd, String newCfm,
+         Message result);
+
+    /**
+     * response.obj will be a an int[2]
+     *
+     * response.obj[0] will be TS 27.007 +COLP parameter 'n'
+     *  0 COLP disabled
+     *  1 COLP enabled
+     *
+     * response.obj[1] will be TS 27.007 +COLP parameter 'm'
+     *  0 COLP not provisioned
+     *  1 COLP provisioned
+     *  2 unknown (e.g. no network, etc.)
+     */
+    void getCOLP(Message response);
+
+    /**
+     * enable is true for enable / false for disable COLP (ONLY affect TE not NW)
+     *
+     * response.obj is null
+     */
+    void setCOLP(boolean enable, Message response);
+
+    /**
+     * response.obj will be a an int[1]
+     *
+     * response.obj[0] will be proprietary +COLR parameter 'n'
+     *  0 COLR not provisioned
+     *  1 COLR provisioned
+     *  2 unknown (e.g. no network, etc.)
+     */
+    void getCOLR(Message response);
+
+    /**
+     * enable is true for enable / false for disable CLIP (ONLY affect TE not NW)
+     *
+     * response.obj is null
+     */
+    void setCLIP(boolean enable, Message response);
+    /* M: SS part end */
+
+    //MTK-START multiple application support
+    /**
+     * M: Open application in the UICC
+     *
+     * @param application: application ID
+     * @param response The message to send.
+     */
+    public void openIccApplication(int application, Message response);
+
+    /**
+     * Query application status
+     *
+     * @param sessionId: The channel ID
+     * @param response The message to send.
+     */
+    public void getIccApplicationStatus(int sessionId, Message result);
+
+
+    /**
+     * Register the handler for event notifications for sessionid of an application changed event.
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForSessionChanged(Handler h, int what, Object obj);
+
+    /**
+     * Unregister the handler for event notifications for sessionid of an application changed event.
+     *
+     * @param h Handler for notification message.
+     */
+    void unregisterForSessionChanged(Handler h);
+    //MTK-END multiple application support
+
+    /**
+     * Query network lock status according to indicated category.
+     *
+     * @param categrory network lock category
+     *                  0 for Network personalisation category
+     *                  1 for Network subset personalisation category
+     *                  2 for Service provider personalisation category
+     *                  3 for Corporate(GID) personalisation category
+     *                  4 for SIM/USIM(IMSI) personalisation category
+     * @param response Callback message containing response structure.
+     */
+    void queryNetworkLock(int categrory, Message response);
+
+    /**
+     * Query network lock status according to indicated category.
+     *
+     * @param categrory network lock category
+     *                  "0" for Network personalisation category
+     *                  "1" for Network subset personalisation category
+     *                  "2" for Service provider personalisation category
+     *                  "3" for Corporate(GID) personalisation category
+     *                  "4" for SIM/USIM(IMSI) personalisation category
+     * @param lockop lock operation
+     *               "0" for unlock opreation
+     *               "1" for lock opreation
+     *               "2" for add lock opreation
+     *               "3" for remove lock opreation
+     *               "4" for disable lock category opreation
+     * @param password password of indicated network lock
+     * @param data_imsi IMSI value used to setup lock
+     * @param gid1 GID1 value used to setup lock
+     * @param gid2 GID2 value used to setup lock
+     * @param response Callback message containing response structure.
+     */
+    void setNetworkLock(int catagory, int lockop, String password,
+            String data_imsi, String gid1, String gid2, Message response);
+
+
+    /**
+     * Request security context authentication for SIM/USIM/ISIM
+     */
+    public void doGeneralSimAuthentication(int sessionId, int mode , int tag, String param1,
+                                                    String param2, Message response);
+
+    // Added by M begin
+    void iccGetATR(Message result);
+    void iccOpenChannelWithSw(String AID, Message result);
+
+    void registerForSimMissing(Handler h, int what, Object obj);
+    void unregisterForSimMissing(Handler h);
+
+    void registerForSimRecovery(Handler h, int what, Object obj);
+    void unregisterForSimRecovery(Handler h);
+
+    public void registerForVirtualSimOn(Handler h, int what, Object obj);
+    public void unregisterForVirtualSimOn(Handler h);
+
+    public void registerForVirtualSimOff(Handler h, int what, Object obj);
+    public void unregisterForVirtualSimOff(Handler h);
+
+    /**
+     * Sets the handler for event notifications for SIM plug-out event.
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForSimPlugOut(Handler h, int what, Object obj);
+
+    /**
+     * Unregister the handler for event notifications for SIM plug-out event.
+     *
+     * @param h Handler for notification message.
+     */
+    void unregisterForSimPlugOut(Handler h);
+
+    /**
+     * Sets the handler for event notifications for SIM plug-in event.
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForSimPlugIn(Handler h, int what, Object obj);
+
+    /**
+     * Unregister the handler for event notifications for SIM plug-in event.
+     *
+     * @param h Handler for notification message.
+     */
+    void unregisterForSimPlugIn(Handler h);
+
+    /**
+     * Sets the handler for event notifications for Tray plug-in event in common slot project.
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForTrayPlugIn(Handler h, int what, Object obj);
+
+    /**
+     * Unregister the handler for event notifications for Tray plug-in event in common slot project.
+     *
+     * @param h Handler for notification message.
+     */
+    void unregisterForTrayPlugIn(Handler h);
+
+    /**
+     * Sets the handler for event notifications for SIM common slot no changed.
+     *
+     */
+    void registerForCommonSlotNoChanged(Handler h, int what, Object obj);
+
+    /**
+     * Unregister the handler for event notifications for SIM common slot no changed.
+     *
+     */
+    void unregisterForCommonSlotNoChanged(Handler h);
+
+    void registerSetDataAllowed(Handler h, int what, Object obj);
+    void unregisterSetDataAllowed(Handler h);
+
+
+    /**
+     * Send BT SIM profile
+     * @param nAction
+     *          the type of the action
+     *          0: Connect
+     *          1: Disconnect
+     *          2: Power On
+     *          3: Power Off
+     *          4: Reset
+     *          5: APDU
+     * @param nType
+     *          Indicate which transport protocol is the preferred one
+     *          0x00 : T=0
+     *          0x01 : T=1
+     * @param strData
+     *          Only be used when action is APDU transfer
+     * @param response
+     *          Callback message containing response structure.
+     */
+    public void sendBTSIMProfile(int nAction, int nType, String strData, Message response);
+
+    void registerForEfCspPlmnModeBitChanged(Handler h, int what, Object obj);
+    void unregisterForEfCspPlmnModeBitChanged(Handler h);
+
+    /**
+     * Request the information of the given storage type
+     *
+     * @param type
+     *          the type of the storage, refer to PHB_XDN defined in the RilConstants
+     * @param response
+     *          Callback message
+     *          response.obj.result is an int[4]
+     *          response.obj.result[0] is number of current used entries
+     *          response.obj.result[1] is number of total entries in the storage
+     *          response.obj.result[2] is maximum supported length of the number
+     *          response.obj.result[3] is maximum supported length of the alphaId
+     */
+    public void queryPhbStorageInfo(int type, Message response);
+
+    /**
+     * Request update a PHB entry using the given {@link PhbEntry}
+     *
+     * @param entry a PHB entry strucutre {@link PhbEntry}
+     *          when one of the following occurs, it means delete the entry.
+     *          1. entry.number is NULL
+     *          2. entry.number is empty and entry.ton = 0x91
+     *          3. entry.alphaId is NULL
+     *          4. both entry.number and entry.alphaId are empty.
+     * @param result
+     *          Callback message containing if the action is success or not.
+     */
+    public void writePhbEntry(PhbEntry entry, Message result);
+
+    /**
+     * Request read PHB entries from the given storage
+     * @param type
+     *          the type of the storage, refer to PHB_* defined in the RilConstants
+     * @param bIndex
+     *          the begin index of the entries to be read
+     * @param eIndex
+     *          the end index of the entries to be read, note that the (eIndex - bIndex +1)
+     *          should not exceed the value RilConstants.PHB_MAX_ENTRY
+     *
+     * @param response
+     *          Callback message containing an array of {@link PhbEntry} structure.
+     */
+    public void ReadPhbEntry(int type, int bIndex, int eIndex, Message response);
+
+    /**
+     * Sets the handler for PHB ready notification
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForPhbReady(Handler h, int what, Object obj);
+    void unregisterForPhbReady(Handler h);
+
+    void queryUPBCapability(Message response);
+    void editUPBEntry(int entryType, int adnIndex, int entryIndex, String strVal,
+         String tonForNum, Message response);
+    void deleteUPBEntry(int entryType, int adnIndex, int entryIndex, Message response);
+    void readUPBGasList(int startIndex, int endIndex, Message response);
+    void readUPBGrpEntry(int adnIndex, Message response);
+    void writeUPBGrpEntry(int adnIndex, int[] grpIds, Message response);
+
+    void getPhoneBookStringsLength(Message result);
+    void getPhoneBookMemStorage(Message result);
+    void setPhoneBookMemStorage(String storage, String password, Message result);
+    void readPhoneBookEntryExt(int index1, int index2, Message result);
+    void writePhoneBookEntryExt(PBEntry entry, Message result);
+
+    // Added by M end
+
+    // MTK-START, SMS part
+    /*
+     * Get sms parameters from EFsmsp
+     */
+    void getSmsParameters(Message response);
+
+    /*
+     * Set sms parameters into EFsmsp
+     */
+    void setSmsParameters(SmsParameters params, Message response);
+
+    /**
+     * Get SMS SIM Card memory's total and used number
+     *
+     * @param result callback message
+     */
+    void getSmsSimMemoryStatus(Message result);
+
+    void setEtws(int mode, Message result);
+    void setOnEtwsNotification(Handler h, int what, Object obj);
+    void unSetOnEtwsNotification(Handler h);
+
+    /**
+     * Sets the handler for ME SMS storage full unsolicited message.
+     * Unlike the register methods, there's only one notification handler
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void setOnMeSmsFull(Handler h, int what, Object obj);
+    void unSetOnMeSmsFull(Handler h);
+
+    /**
+     * Register the handler for SMS ready notification.
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForSmsReady(Handler h, int what, Object obj);
+
+    /**
+     * Unregister the handler for SMS ready notification.
+     *
+     * @param h Handler for notification message.
+     */
+    void unregisterForSmsReady(Handler h);
+
+    void setCellBroadcastChannelConfigInfo(String config, int cb_set_type, Message response);
+    void setCellBroadcastLanguageConfigInfo(String config, Message response);
+    void queryCellBroadcastConfigInfo(Message response);
+    void removeCellBroadcastMsg(int channelId, int serialId, Message response);
+    // MTK-END, SMS part
+
+    void getPOLCapabilty(Message response);
+    void getCurrentPOLList(Message response);
+    void setPOLEntry(int index, String numeric, int nAct, Message response);
+
+    void registerForPsNetworkStateChanged(Handler h, int what, Object obj);
+    void unregisterForPsNetworkStateChanged(Handler h);
+
+    void registerForIMEILock(Handler h, int what, Object obj);
+    void unregisterForIMEILock(Handler h);
+
+   /**
+     * Sets the handler for Invalid SIM unsolicited message.
+     * Unlike the register* methods, there's only one notification handler
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void setInvalidSimInfo(Handler h, int what, Object obj);
+    void unSetInvalidSimInfo(Handler h);
+
+    // get Available network informaitons API
+    void registerForGetAvailableNetworksDone(Handler h, int what, Object obj);
+    void unregisterForGetAvailableNetworksDone(Handler h);
+    boolean isGettingAvailableNetworks();
+
+  // Femtocell (CSG) feature START
+  /**
+     * Queries the currently available femtocells
+     *
+     * ((AsyncResult)response.obj).result  is a List of FemtoCellInfo objects
+     */
+    void getFemtoCellList(String operatorNumeric, int rat, Message response);
+
+  /**
+     * Abort quering available femtocells
+     *
+     * ((AsyncResult)response.obj).result  is a List of FemtoCellInfo objects
+     */
+    void abortFemtoCellList(Message response);
+
+  /**
+     * select femtocell
+     *
+     * @param femtocell info
+     */
+    void selectFemtoCell(FemtoCellInfo femtocell, Message response);
+
+    public void registerForFemtoCellInfo(Handler h, int what, Object obj);
+    public void unregisterForFemtoCellInfo(Handler h);
+    // Femtocell (CSG) feature END
+
+    /**
+     * unlike the register* methods, there's only one Neighboring cell info handler
+     *
+     * AsyncResult.result is an Object[]
+     * ((Object[])AsyncResult.result)[0] is a String containing the RAT
+     * ((Object[])AsyncResult.result)[1] is a String containing the neighboring cell info raw data
+     *
+     * Please note that the delivery of this message may be delayed several
+     * seconds on system startup
+     */
+    void registerForNeighboringInfo(Handler h, int what, Object obj);
+    void unregisterForNeighboringInfo(Handler h);
+
+    /**
+     * unlike the register* methods, there's only one Network info handler
+     *
+     * AsyncResult.result is an Object[]
+     * ((Object[])AsyncResult.result)[0] is a String containing the type
+     * ((Object[])AsyncResult.result)[1] is a String contain the network info raw data
+     *
+     * Please note that the delivery of this message may be delayed several
+     * seconds on system startup
+     */
+    void registerForNetworkInfo(Handler h, int what, Object obj);
+    void unregisterForNetworkInfo(Handler h);
+
+    // IMS
+    public void registerForImsEnable(Handler h, int what, Object obj);
+    public void unregisterForImsEnable(Handler h);
+    public void registerForImsDisable(Handler h, int what, Object obj);
+    public void unregisterForImsDisable(Handler h);
+    public void setIMSEnabled(boolean enable, Message response);
+    public void registerForImsDisableDone(Handler h, int what, Object obj);
+    public void unregisterForImsDisableDone(Handler h);
+    public void registerForImsRegistrationInfo(Handler h, int what, Object obj);
+    public void unregisterForImsRegistrationInfo(Handler h);
+
+    void setTrm(int mode, Message result);
+
+    void setOnPlmnChangeNotification(Handler h, int what, Object obj);
+    void unSetOnPlmnChangeNotification(Handler h);
+    void setOnRegistrationSuspended(Handler h, int what, Object obj);
+    void unSetOnRegistrationSuspended(Handler h);
+    void storeModemType(int modemType, Message response);
+    void reloadModemType(int modemType, Message response);
+    void queryModemType(Message response);
+
+    //Remote SIM ME lock related APIs [Start]
+    void registerForMelockChanged(Handler h, int what, Object obj);
+    void unregisterForMelockChanged(Handler h);
+    //Remote SIM ME lock related APIs [End]
+
+    /** M: start */
+    void setupDataCall(String radioTechnology, String profile, String apn, String user,
+            String password, String authType, String protocol, String interfaceId, Message result);
+
+     /**
+     * @param apn for apn name
+     * @param protocol for IP type
+     * @param authType for Auth type
+     * @param username for username
+     * @param password for password
+     * @param obj for ia extend parameter
+     * @param result for result
+     */
+    void setInitialAttachApn(String apn, String protocol, int authType, String username,
+            String password, Object obj, Message result);
+
+    // Fast Dormancy
+    void setScri(boolean forceRelease, Message response);
+    void setFDMode(int mode, int parameter1, int parameter2, Message response);
+    public void setScriResult(Handler h, int what, Object obj);
+    public void unSetScriResult(Handler h);
+    /** M: end */
+
+    /// M: IMS feature. @{
+    /* Register for updating call ids for conference call after SRVCC is done. */
+    public void registerForEconfSrvcc(Handler h, int what, Object obj);
+    public void unregisterForEconfSrvcc(Handler h);
+
+    /* Register for updating conference call merged/added result. */
+    public void registerForEconfResult(Handler h, int what, Object obj);
+    public void unregisterForEconfResult(Handler h);
+
+    /* Register for updating call mode and pau */
+    public void registerForCallInfo(Handler h, int what, Object obj);
+    public void unregisterForCallInfo(Handler h);
+
+    /* Add/Remove VoLTE(IMS) conference call member. */
+    public void addConferenceMember(int confCallId, String address, int callIdToAdd, Message response);
+    public void removeConferenceMember(int confCallId, String address, int callIdToRemove,
+           Message response);
+
+    /**
+     * To resume the call.
+     * @param callIdToResume toIndicate which call session to resume.
+     * @param response command response.
+     */
+    public void resumeCall(int callIdToResume, Message response);
+
+    /**
+     * To hold the call.
+     * @param callIdToHold toIndicate which call session to hold.
+     * @param response command response.
+     */
+    public void holdCall(int callIdToHold, Message response);
+
+    /**
+     * M: notify screen state to RILD
+     *
+     * @param on The screen state
+     */
+    public void sendScreenState(boolean on);
+
+    /// @}
+
+    /**
+     * M: CC33 LTE.
+     */
+    public void registerForRacUpdate(Handler h, int what, Object obj);
+    public void unregisterForRacUpdate(Handler h);
+    public void setDataOnToMD(boolean enable, Message result);
+    public void setRemoveRestrictEutranMode(boolean enable, Message result);
+    public void registerForRemoveRestrictEutran(Handler h, int what, Object obj);
+    public void unregisterForRemoveRestrictEutran(Handler h);
+
+    /**
+     * M: Reset Attach Apn
+     */
+    public void registerForResetAttachApn(Handler h, int what, Object obj);
+    public void unregisterForResetAttachApn(Handler h);
+
+   /**
+    * M: [LTE][Low Power][UL traffic shaping]
+    */
+    public void setLteAccessStratumReport(boolean enable, Message result);
+    public void setLteUplinkDataTransfer(int state, int interfaceId, Message result);
+    public void registerForLteAccessStratumState(Handler h, int what, Object obj);
+    public void unregisterForLteAccessStratumState(Handler h);
+
+    public void registerForModulation(Handler h, int what, Object obj);
+    public void unregisterForModulation(Handler h);
+
+    /**
+     * IMS.
+     * @param enable if true.
+     * @param response User-defined message code.
+     */
+
+    public void setDataCentric(boolean enable, Message response);
+
+
+    /// M: CC010: Add RIL interface @{
+    /**
+     * Notify modem about IMS call status.
+     * @param existed True if there is at least one IMS call existed, else return false.
+     * @param response User-defined message code.
+     */
+    public void setImsCallStatus(boolean existed, Message response);
+    /// @}
+
+    /// M: CC072: Add Customer proprietary-IMS RIL interface. @{
+    /**
+     * Transfer IMS call to CS modem.
+     *
+     * @param numberOfCall The number of call
+     * @param callList IMS call context
+     */
+     public void setSrvccCallContextTransfer(int numberOfCall, SrvccCallContext[] callList);
+
+    /**
+     * Update IMS registration status to modem.
+     *
+     * @param regState IMS registration state
+     *                 0: IMS unregistered
+     *                 1: IMS registered
+     * @param regType  IMS registration type
+     *                 0: Normal IMS registration
+     *                 1: Emergency IMS registration
+     * @param reason   The reason of state transition from registered to unregistered
+     *                 0: Unspecified
+     *                 1: Power off
+     *                 2: RF off
+     */
+     public void updateImsRegistrationStatus(int regState, int regType, int reason);
+     /// @}
+
+    void setBandMode(int[] bandMode, Message response);
+
+    public void registerForAbnormalEvent(Handler h, int what, Object obj);
+
+    public void unregisterForAbnormalEvent(Handler h);
+
+    /**
+     * M: return display state to RILD
+     *
+     */
+    public int getDisplayState();
+
+    /**
+     *  Query operator name from network
+     * @param subId
+     *          Indicates subscription 0 or subscription 1.
+     * @param numeric for operator numeric
+     * @param desireLongName
+     *          Indicates longname or shortname
+     */
+    public String lookupOperatorNameFromNetwork(long subId, String numeric, boolean desireLongName);
+
+    /* M: IMS VoLTE conference dial feature start*/
+    /**
+     * Dial conference call.
+     * @param participants participants' dailing number.
+     * @param clirMode indication to present the dialing number or not.
+     * @param isVideoCall indicate the call is belong to video call or voice call.
+     * @param result the command result.
+     */
+    void conferenceDial(String[] participants, int clirMode, boolean isVideoCall, Message result);
+    /* IMS VoLTE conference dial feature end*/
+
+    /**
+      * Register for imsi refresh done.
+      * @param h Handler for notification message.
+      * @param what User-defined message code.
+      * @param obj User object.
+      */
+    public void registerForImsiRefreshDone(Handler h, int what, Object obj);
+    /**
+      * Unregister for imsi refresh done.
+      * @param h Handler for notification message.
+      */
+    public void unregisterForImsiRefreshDone(Handler h) ;
+
+    /**
+      * To get RadioCapability stored in RILJ when phone object is not created
+      */
+    public RadioCapability getBootupRadioCapability();
+
+    /**
+     * Set GSM modem to suspend network registration.
+     * @param enabled True to pause and false to resume.
+     * @param response the responding message.
+     */
+    void setRegistrationSuspendEnabled(int enabled, Message response);
+
+    /**
+     * Request GSM modem to resume network registration.
+     * @param sessionId the session index.
+     * @param response the responding message.
+     */
+    void setResumeRegistration(int sessionId, Message response);
+
+    /**
+     * Enable or disable MD3 Sleep.
+     * @param enable MD3 sleep.
+     */
+    void enableMd3Sleep(int enable);
+
+    /**
+     * Register for network exsit or not for ECC only.
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForNetworkExsit(Handler h, int what, Object obj);
+
+    /**
+     * Unregister for network exsit.
+     * @param h Handler for notification message.
+     */
+    void unregisterForNetworkExsit(Handler h);
+
+    /**
+     * Register for network event.
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForNetworkEvent(Handler h, int what, Object obj);
+
+    /**
+     * Unregister for network event.
+     * @param h Handler for notification message.
+     */
+    void unregisterForNetworkEvent(Handler h);
+
+    /// M: For CDMA call accepted @{
+    /**
+     * Register the handler for call accepted.
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForCallAccepted(Handler h, int what, Object obj);
+
+    /**
+     * Unregister the handler for call accepted.
+     * @param h Handler for notification message.
+     */
+    void unregisterForCallAccepted(Handler h);
+    /// @}
+
+    /**
+     * Trigger mode switch by Ecc
+     * @param mode the target mode.
+     * @param response the responding message.
+     */
+    public void triggerModeSwitchByEcc(int mode, Message response);
 }

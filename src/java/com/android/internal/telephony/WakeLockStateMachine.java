@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2013 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,6 +58,10 @@ public abstract class WakeLockStateMachine extends StateMachine {
     protected PhoneBase mPhone;
 
     protected Context mContext;
+
+    // MTK-START
+    protected static final int EVENT_NEW_ETWS_NOTIFICATION = 2000;
+    // MTK-END
 
     /** Wakelock release delay when returning to idle state. */
     private static final int WAKE_LOCK_TIMEOUT = 3000;
@@ -169,6 +178,16 @@ public abstract class WakeLockStateMachine extends StateMachine {
                     }
                     return HANDLED;
 
+                // MTK-START
+                case EVENT_NEW_ETWS_NOTIFICATION:
+                    // transition to waiting state if we sent a broadcast
+                    log("receive ETWS notification");
+                    if (handleEtwsPrimaryNotification(msg)) {
+                        transitionTo(mWaitingState);
+                    }
+                    return HANDLED;
+                // MTK-END
+
                 default:
                     return NOT_HANDLED;
             }
@@ -184,6 +203,9 @@ public abstract class WakeLockStateMachine extends StateMachine {
         public boolean processMessage(Message msg) {
             switch (msg.what) {
                 case EVENT_NEW_SMS_MESSAGE:
+                // MTK-START
+                case EVENT_NEW_ETWS_NOTIFICATION:
+                // MTK-END
                     log("deferring message until return to idle");
                     deferMessage(msg);
                     return HANDLED;
@@ -251,4 +273,16 @@ public abstract class WakeLockStateMachine extends StateMachine {
     protected void loge(String s, Throwable e) {
         Rlog.e(getName(), s, e);
     }
+
+    // MTK-START
+    /**
+     * Implemented by subclass to handle messages in {@link IdleState}.
+     * It is used to handle the ETWS primary notification.
+     * @param message the message to process
+     * @return true to transition to {@link WaitingState}; false to stay in {@link IdleState}
+     */
+    protected boolean handleEtwsPrimaryNotification(Message message) {
+        return false;
+    }
+    // MTK-END
 }

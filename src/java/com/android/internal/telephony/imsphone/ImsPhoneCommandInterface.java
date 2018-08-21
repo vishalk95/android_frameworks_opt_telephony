@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2013 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -73,8 +78,14 @@ class ImsPhoneCommandInterface extends BaseCommands implements CommandsInterface
             String newPwd, Message result) {
     }
 
+    /* M: SS part */
+    public void changeBarringPassword(String facility, String oldPwd, String newPwd,
+        String newCfm , Message result) {
+    }
+    /* M: SS part end */
+
     @Override
-    public void supplyNetworkDepersonalization(String netpin, String type, Message result) {
+    public void supplyNetworkDepersonalization(String netpin, Message result) {
     }
 
     @Override
@@ -254,11 +265,13 @@ class ImsPhoneCommandInterface extends BaseCommands implements CommandsInterface
     public void writeSmsToRuim(int status, String pdu, Message response) {
     }
 
-    @Override
+    // [L migration] we don't need to implement here due to this method already implemented in parent class,
+    // so if sub class needs to implement it is depend on requirement.
+    /*@Override
     public void setupDataCall(String radioTechnology, String profile,
             String apn, String user, String password, String authType,
             String protocol, Message result) {
-    }
+    }*/
 
     @Override
     public void deactivateDataCall(int cid, int reason, Message result) {
@@ -303,6 +316,20 @@ class ImsPhoneCommandInterface extends BaseCommands implements CommandsInterface
     @Override
     public void setCLIR(int clirMode, Message result) {
     }
+
+    /* M: SS part */
+    public void setCLIP(boolean enable, Message result) {
+    }
+    public void getCOLR(Message response) {
+    }
+
+    public void setCOLP(boolean enable, Message response) {
+    }
+
+    public void getCOLP(Message response) {
+    }
+
+    /* M: SS part end */
 
     @Override
     public void queryCallWaiting(int serviceClass, Message response) {
@@ -389,11 +416,15 @@ class ImsPhoneCommandInterface extends BaseCommands implements CommandsInterface
     }
 
     @Override
-    public void setBandMode (int bandMode, Message response) {
+    public void setBandMode(int bandMode, Message response) {
     }
 
     @Override
-    public void queryAvailableBandMode (Message response) {
+    public void setBandMode(int[] bandMode, Message response) {
+    }
+
+    @Override
+    public void queryAvailableBandMode(Message response) {
     }
 
     @Override
@@ -410,7 +441,7 @@ class ImsPhoneCommandInterface extends BaseCommands implements CommandsInterface
 
     @Override
     public void handleCallSetupRequestFromSim(
-            boolean accept, Message response) {
+            boolean accept, int resCode, Message response) {
     }
 
     @Override
@@ -569,6 +600,20 @@ class ImsPhoneCommandInterface extends BaseCommands implements CommandsInterface
     }
 
     @Override
+    public void iccOpenLogicalChannel(String AID, Message response) {}
+
+    @Override
+    public void iccCloseLogicalChannel(int channel, Message response) {}
+
+    @Override
+    public void iccTransmitApduLogicalChannel(int channel, int cla, int instruction,
+                                              int p1, int p2, int p3, String data,
+                                              Message response) {}
+    @Override
+    public void iccTransmitApduBasicChannel(int cla, int instruction, int p1, int p2,
+                                            int p3, String data, Message response) {}
+
+    @Override
     public void nvReadItem(int itemID, Message response) {}
 
     @Override
@@ -611,9 +656,78 @@ class ImsPhoneCommandInterface extends BaseCommands implements CommandsInterface
     public void getModemActivityInfo(Message result) {
     }
 
+    // Added by M begin
     @Override
-    public void setMaxTransmitPower(int state, Message response) {
+    public void iccGetATR(Message response) {
     }
 
-    public boolean needsOldRilFeature(String feature) { return false; }
+    @Override
+    public void iccOpenChannelWithSw(String AID, Message result){
+    }
+
+    // Added by M end
+
+    @Override
+    public void setTrm(int mode, Message result) {
+    }
+
+    @Override
+    public void setOnPlmnChangeNotification(Handler h, int what, Object obj) {
+    }
+
+    @Override
+    public void unSetOnPlmnChangeNotification(Handler h) {
+    }
+
+    @Override
+    public void setOnRegistrationSuspended(Handler h, int what, Object obj) {
+    }
+
+    @Override
+    public void unSetOnRegistrationSuspended(Handler h) {
+    }
+
+    @Override
+    public void setResumeRegistration(int sessionId, Message response) {
+    }
+
+    @Override
+    public void queryModemType(Message response) {
+    }
+
+    @Override
+    public void storeModemType(int modemType, Message response) {
+    }
+
+    @Override
+    public void reloadModemType(int modemType, Message response) {
+    }
+
+    // UTK start
+    public void getUtkLocalInfo(Message response) {
+    }
+
+    public void requestUtkRefresh(int type, Message response) {
+    }
+
+    public void handleCallSetupRequestFromUim(boolean accept, Message response) {
+    }
+
+    public void reportUtkServiceIsRunning(Message result) {
+    }
+
+    public void profileDownload(String profile, Message response) {
+    }
+
+    public void queryUtkSetupMenuFromMD(String contents, Message response) {
+    }
+
+    /** Set the xTK mode.*/
+    public void setStkSwitchMode(int mode) {
+    }
+
+    /** UTK Bip Ps type. */
+    public void setBipPsType(int type) {
+    }
+    //UTK end
 }

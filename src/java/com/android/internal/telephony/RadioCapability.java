@@ -16,6 +16,9 @@
 
 package com.android.internal.telephony;
 
+import android.telephony.Rlog;
+import android.util.Log;
+
 /**
  * Object to indicate the phone radio capability.
  *
@@ -177,6 +180,7 @@ public class RadioCapability {
      * @return radio access family
      */
     public int getRadioAccessFamily() {
+        Rlog.d("RadioCapability", "getRadioAccessFamily mPhoneId:" + mPhoneId + " RadioAccessFamily:" + mRadioAccessFamily);
         return mRadioAccessFamily;
     }
 
@@ -186,6 +190,7 @@ public class RadioCapability {
      * @return logical modem uuid
      */
     public String getLogicalModemUuid() {
+        Rlog.d("RadioCapability", "getLogicalModemUuid mPhoneId:" + mPhoneId + " LogicalModemUuid:" + mLogicalModemUuid);
         return mLogicalModemUuid;
     }
 

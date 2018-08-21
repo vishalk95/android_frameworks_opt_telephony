@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2007 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,12 +40,6 @@ public class SuppServiceNotification {
     /** TS 27.007 7.17 "number" (MT only) */
     public String number;
 
-    /** List of forwarded numbers, if any */
-    public String[] history;
-
-    static public final int NOTIFICATION_TYPE_MO = 0;
-    static public final int NOTIFICATION_TYPE_MT = 1;
-
     static public final int MO_CODE_UNCONDITIONAL_CF_ACTIVE     = 0;
     static public final int MO_CODE_SOME_CF_ACTIVE              = 1;
     static public final int MO_CODE_CALL_FORWARDED              = 2;
@@ -50,6 +49,10 @@ public class SuppServiceNotification {
     static public final int MO_CODE_INCOMING_CALLS_BARRED       = 6;
     static public final int MO_CODE_CLIR_SUPPRESSION_REJECTED   = 7;
     static public final int MO_CODE_CALL_DEFLECTED              = 8;
+    /// M: Added for VoLTE. @{
+    static public final int MO_CODE_CALL_FORWARDED_TO           = 9;
+    static public final int MO_CODE_CALL_IS_EMERGENCY           = 10;
+    /// @}
 
     static public final int MT_CODE_FORWARDED_CALL              = 0;
     static public final int MT_CODE_CUG_CALL                    = 1;
@@ -63,14 +66,22 @@ public class SuppServiceNotification {
     static public final int MT_CODE_DEFLECTED_CALL              = 9;
     static public final int MT_CODE_ADDITIONAL_CALL_FORWARDED   = 10;
 
+    /// M: added for call forwarding. @{
+    static public final int MT_CODE_FORWARDED_CF                = 11;
+    static public final int MT_CODE_FORWARDED_CF_UNCOND         = 12;
+    static public final int MT_CODE_FORWARDED_CF_COND           = 13;
+    static public final int MT_CODE_FORWARDED_CF_BUSY           = 14;
+    static public final int MT_CODE_FORWARDED_CF_NO_REPLY       = 15;
+    static public final int MT_CODE_FORWARDED_CF_NOT_REACHABLE  = 16;
+    /// @}
+
     @Override
     public String toString()
     {
         return super.toString() + " mobile"
-            + (notificationType == NOTIFICATION_TYPE_MO ? " originated " : " terminated ")
+            + (notificationType == 0 ? " originated " : " terminated ")
             + " code: " + code
             + " index: " + index
-            + " history: " + history
             + " \""
             + PhoneNumberUtils.stringFromStringAndTOA(number, type) + "\" ";
     }

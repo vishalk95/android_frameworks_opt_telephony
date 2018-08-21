@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,7 +53,15 @@ import com.android.internal.util.IndentingPrintWriter;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.HashMap;
-import java.lang.reflect.Constructor;
+
+import com.mediatek.common.MPlugin;
+import com.mediatek.common.telephony.IDeviceInformationExt;
+import com.mediatek.internal.telephony.NetworkManager;
+import com.mediatek.internal.telephony.RadioManager;
+import com.mediatek.internal.telephony.worldphone.IWorldPhone;
+import com.mediatek.internal.telephony.worldphone.WorldPhoneUtil;
+import com.mediatek.internal.telephony.worldphone.WorldPhoneWrapper;
+import com.mediatek.internal.telephony.worldphone.WorldMode;
 
 /**
  * {@hide}
@@ -70,15 +83,21 @@ public class PhoneFactory {
 
     static private ProxyController mProxyController;
     static private UiccController mUiccController;
-
+    //MTK-START [mtk06800]  RadioManager for proprietary power on flow
+    static private RadioManager mRadioManager;
+    //MTK-END [mtk06800]  RadioManager for proprietary power on flow
+    static private NetworkManager mNetworkManager;
     static private CommandsInterface sCommandsInterface = null;
     static private SubscriptionInfoUpdater sSubInfoRecordUpdater = null;
 
     static private boolean sMadeDefaults = false;
     static private PhoneNotifier sPhoneNotifier;
     static private Context sContext;
+    static private IWorldPhone sWorldPhone = null;
 
     static private final HashMap<String, LocalLog>sLocalLogs = new HashMap<String, LocalLog>();
+
+    static private IDeviceInformationExt sDeviceIdenitityExt;
 
     //***** Class Methods
 
@@ -125,15 +144,6 @@ public class PhoneFactory {
 
                 sPhoneNotifier = new DefaultPhoneNotifier();
 
-                // Get preferred network mode
-                int preferredNetworkMode = RILConstants.PREFERRED_NETWORK_MODE;
-                if (TelephonyManager.getLteOnCdmaModeStatic() == PhoneConstants.LTE_ON_CDMA_TRUE) {
-                    preferredNetworkMode = Phone.NT_MODE_GLOBAL;
-                }
-                if (TelephonyManager.getLteOnGsmModeStatic() != 0) {
-                    preferredNetworkMode = Phone.NT_MODE_LTE_GSM_WCDMA;
-                }
-
                 int cdmaSubscription = CdmaSubscriptionSourceManager.getDefault(context);
                 Rlog.i(LOG_TAG, "Cdma Subscription set to " + cdmaSubscription);
 
@@ -144,58 +154,67 @@ public class PhoneFactory {
                 int[] networkModes = new int[numPhones];
                 sProxyPhones = new PhoneProxy[numPhones];
                 sCommandsInterfaces = new RIL[numPhones];
-                String sRILClassname = SystemProperties.get("ro.telephony.ril_class", "RIL").trim();
-                Rlog.i(LOG_TAG, "RILClassname is " + sRILClassname);
+                //[ALPS01784188]
+                int capabilityPhoneId = Integer.valueOf(
+                        SystemProperties.get(PhoneConstants.PROPERTY_CAPABILITY_SWITCH, "1"));
 
                 for (int i = 0; i < numPhones; i++) {
-                    // reads the system properties and makes commandsinterface
-                    // Get preferred network type.
-                   try {
-                        networkModes[i]  = TelephonyManager.getIntAtIndex(
-                                context.getContentResolver(),
-                               Settings.Global.PREFERRED_NETWORK_MODE , i);
-                    } catch (SettingNotFoundException snfe) {
-                        Rlog.e(LOG_TAG, "Settings Exception Reading Value At Index for"+
-                               " Settings.Global.PREFERRED_NETWORK_MODE");
-                        networkModes[i] = preferredNetworkMode;
+                    //reads the system properties and makes commandsinterface
+                    //try {
+//                        // Get preferred network type.
+//                        TODO: Sishir added this code to but we need a new technique for MSim
+//                        int networkType = calculatePreferredNetworkType(context);
+//                        Rlog.i(LOG_TAG, "Network Type set to " + Integer.toString(networkType));
+
+                    //[ALPS01784188]-Start: Only set 4/3G capability SIM with preferred RAT
+                    //    networkModes[i]  = TelephonyManager.getIntAtIndex(
+                    //            context.getContentResolver(),
+                    //            Settings.Global.PREFERRED_NETWORK_MODE, i);
+                    //} catch (SettingNotFoundException snfe) {
+                    //    Rlog.e(LOG_TAG, "Settings Exception Reading Value At Index for"+
+                    //            " Settings.Global.PREFERRED_NETWORK_MODE");
+                    //    networkModes[i] = preferredNetworkMode;
+                    //}
+
+                    if (i == (capabilityPhoneId - 1)) {
+                        networkModes[i] = calculatePreferredNetworkType(context);
+                    } else {
+                        networkModes[i] = RILConstants.NETWORK_MODE_GSM_ONLY;
                     }
-                    Rlog.i(LOG_TAG, "Network Mode set to " + Integer.toString(networkModes[i]));
-                    // Use reflection to construct the RIL class (defaults to RIL)
-                    try {
-                        sCommandsInterfaces[i] = instantiateCustomRIL(
-                                                     sRILClassname, context, networkModes[i], cdmaSubscription, i);
-                    } catch (Exception e) {
-                        // 6 different types of exceptions are thrown here that it's
-                        // easier to just catch Exception as our "error handling" is the same.
-                        // Yes, we're blocking the whole thing and making the radio unusable. That's by design.
-                        // The log message should make it clear why the radio is broken
-                        while (true) {
-                            Rlog.e(LOG_TAG, "Unable to construct custom RIL class", e);
-                            try {Thread.sleep(10000);} catch (InterruptedException ie) {}
-                        }
-                    }
+                    //[ALPS01784188]-END
+                    Rlog.i(LOG_TAG, "RILJ Sub = " + i);
+                    Rlog.i(LOG_TAG, "capabilityPhoneId=" + capabilityPhoneId
+                            + " Network Mode set to " + Integer.toString(networkModes[i]));
+                    sCommandsInterfaces[i] = new RIL(context, networkModes[i],
+                            cdmaSubscription, i);
                 }
                 Rlog.i(LOG_TAG, "Creating SubscriptionController");
-                TelephonyPluginDelegate.getInstance().initSubscriptionController(context,
-                        sCommandsInterfaces);
+                SubscriptionController.init(context, sCommandsInterfaces);
 
                 // Instantiate UiccController so that all other classes can just
                 // call getInstance()
                 mUiccController = UiccController.make(context, sCommandsInterfaces);
+                // MTK-END, Refine SVLTE remote SIM APP type, 2015/04/29
+                //MTK-START [mtk06800] create RadioManager for proprietary power on flow
+                mRadioManager = RadioManager.init(context, numPhones, sCommandsInterfaces);
+                //MTK-END [mtk06800] create RadioManager for proprietary power on flow
+                mNetworkManager = NetworkManager.init(context, numPhones, sCommandsInterfaces);
 
                 for (int i = 0; i < numPhones; i++) {
                     PhoneBase phone = null;
                     int phoneType = TelephonyManager.getPhoneType(networkModes[i]);
                     if (phoneType == PhoneConstants.PHONE_TYPE_GSM) {
-                        phone = TelephonyPluginDelegate.getInstance().makeGSMPhone(context,
+                        phone = new GSMPhone(context,
                                 sCommandsInterfaces[i], sPhoneNotifier, i);
+                        phone.startMonitoringImsService();
                     } else if (phoneType == PhoneConstants.PHONE_TYPE_CDMA) {
-                        phone = TelephonyPluginDelegate.getInstance().makeCDMALTEPhone(context,
+                        phone = new CDMALTEPhone(context,
                                 sCommandsInterfaces[i], sPhoneNotifier, i);
+                        phone.startMonitoringImsService();
                     }
                     Rlog.i(LOG_TAG, "Creating Phone with type = " + phoneType + " sub = " + i);
 
-                    sProxyPhones[i] = TelephonyPluginDelegate.getInstance().makePhoneProxy(phone);
+                    sProxyPhones[i] = new PhoneProxy(phone);
                 }
                 mProxyController = ProxyController.getInstance(context, sProxyPhones,
                         mUiccController, sCommandsInterfaces);
@@ -221,53 +240,49 @@ public class PhoneFactory {
 
                 sMadeDefaults = true;
 
+                SubscriptionController.getInstance().updatePhonesAvailability((PhoneProxy[]) sProxyPhones);
                 Rlog.i(LOG_TAG, "Creating SubInfoRecordUpdater ");
-                sSubInfoRecordUpdater = TelephonyPluginDelegate.getInstance().
-                        makeSubscriptionInfoUpdater(context, sProxyPhones, sCommandsInterfaces);
+                sSubInfoRecordUpdater = new SubscriptionInfoUpdater(context,
+                        sProxyPhones, sCommandsInterfaces);
                 SubscriptionController.getInstance().updatePhonesAvailability(sProxyPhones);
-
-                TelephonyPluginDelegate.getInstance().
-                        initExtTelephonyClasses(context, sProxyPhones, sCommandsInterfaces);
-                // Start monitoring after defaults have been made.
-                // Default phone must be ready before ImsPhone is created
-                // because ImsService might need it when it is being opened.
-                for (int i = 0; i < numPhones; i++) {
-                    sProxyPhones[i].startMonitoringImsService();
-                    // Get users NW type, let it override if its not the default NW mode (-1)
-                    int userNwType = SubscriptionController.getInstance().getUserNwMode(
-                            sProxyPhones[i].getSubId());
-                    if (userNwType != SubscriptionManager.DEFAULT_NW_MODE
-                            && userNwType != networkModes[i]) {
-                        sProxyPhones[i].setPreferredNetworkType(userNwType, null);
-                    }
+                //[WorldMode]
+                if (WorldPhoneUtil.isWorldModeSupport() && WorldPhoneUtil.isWorldPhoneSupport()) {
+                    Rlog.i(LOG_TAG, "World mode support");
+                    WorldMode.init();
+                } else if (WorldPhoneUtil.isWorldPhoneSupport()) {
+                    Rlog.i(LOG_TAG, "World phone support");
+                    sWorldPhone = WorldPhoneWrapper.getWorldPhoneInstance();
+                } else {
+                    Rlog.i(LOG_TAG, "World phone not support");
                 }
             }
+        }
+
+        try {
+            Rlog.i(LOG_TAG, "mDeviceIdenitityExt create");
+            sDeviceIdenitityExt = MPlugin.createInstance(
+                    IDeviceInformationExt.class.getName(), context);
+        } catch (Exception e) {
+            Rlog.i(LOG_TAG, "mDeviceIdenitityExt create has error");
+            e.printStackTrace();
         }
     }
 
     public static Phone getCdmaPhone(int phoneId) {
         Phone phone;
         synchronized(PhoneProxy.lockForRadioTechnologyChange) {
-            phone = TelephonyPluginDelegate.getInstance().makeCDMALTEPhone(sContext,
-                    sCommandsInterfaces[phoneId], sPhoneNotifier, phoneId);
+            phone = new CDMALTEPhone(sContext, sCommandsInterfaces[phoneId],
+                    sPhoneNotifier, phoneId);
         }
         return phone;
     }
 
     public static Phone getGsmPhone(int phoneId) {
         synchronized(PhoneProxy.lockForRadioTechnologyChange) {
-            Phone phone = TelephonyPluginDelegate.getInstance().makeGSMPhone(sContext,
-                    sCommandsInterfaces[phoneId], sPhoneNotifier, phoneId);
+            Phone phone = new GSMPhone(sContext, sCommandsInterfaces[phoneId],
+                    sPhoneNotifier, phoneId);
             return phone;
         }
-    }
-
-    private static <T> T instantiateCustomRIL(
-                      String sRILClassname, Context context, int networkMode, int cdmaSubscription, Integer instanceId)
-                      throws Exception {
-        Class<?> clazz = Class.forName("com.android.internal.telephony." + sRILClassname);
-        Constructor<?> constructor = clazz.getConstructor(Context.class, int.class, int.class, Integer.class);
-        return (T) clazz.cast(constructor.newInstance(context, networkMode, cdmaSubscription, instanceId));
     }
 
     public static Phone getDefaultPhone() {
@@ -275,7 +290,13 @@ public class PhoneFactory {
             if (!sMadeDefaults) {
                 throw new IllegalStateException("Default phones haven't been made yet!");
             }
-            return sProxyPhone;
+            int phoneId = SubscriptionController.getInstance().getPhoneId(getDefaultSubscription());
+            Rlog.d(LOG_TAG, "getDefaultPhone before revised: phoneId = " + phoneId);
+            if (phoneId < 0 || phoneId >= TelephonyManager.getDefault().getPhoneCount()) {
+                phoneId = 0;
+            }
+            return sProxyPhones[phoneId];
+            //return sProxyPhone;
         }
     }
 
@@ -311,6 +332,14 @@ public class PhoneFactory {
             }
             return sProxyPhones;
         }
+    }
+
+    public static IWorldPhone getWorldPhone() {
+        if (sWorldPhone == null) {
+            Rlog.d(LOG_TAG, "sWorldPhone is null");
+        }
+
+        return sWorldPhone;
     }
 
     /**
@@ -359,43 +388,25 @@ public class PhoneFactory {
      * @param context The current {@link Context}.
      * @return the preferred network mode that should be set.
      */
+    public static int calculatePreferredNetworkType(Context context) {
+        int networkType = android.provider.Settings.Global.getInt(context.getContentResolver(),
+                android.provider.Settings.Global.PREFERRED_NETWORK_MODE,
+                RILConstants.PREFERRED_NETWORK_MODE);
+        Rlog.d(LOG_TAG, "calculatePreferredNetworkType: networkType = " + networkType);
+        return networkType;
+    }
+
+    /**
+     * Returns the preferred network type that should be set in the modem.
+     *
+     * @param context The current {@link Context}.
+     * @return the preferred network mode that should be set.
+     */
     // TODO: Fix when we "properly" have TelephonyDevController/SubscriptionController ..
     public static int calculatePreferredNetworkType(Context context, int phoneSubId) {
-        int phoneId = SubscriptionController.getInstance().getPhoneId(phoneSubId);
-        int phoneIdNetworkType = RILConstants.PREFERRED_NETWORK_MODE;
-        try {
-            phoneIdNetworkType = TelephonyManager.getIntAtIndex(context.getContentResolver(),
-                    Settings.Global.PREFERRED_NETWORK_MODE , phoneId);
-        } catch (SettingNotFoundException snfe) {
-            Rlog.e(LOG_TAG, "Settings Exception Reading Valuefor phoneID");
-        }
-        int networkType = phoneIdNetworkType;
-        Rlog.d(LOG_TAG, "calculatePreferredNetworkType: phoneId = " + phoneId +
-                " phoneIdNetworkType = " + phoneIdNetworkType);
-
-        if (SubscriptionController.getInstance().isActiveSubId(phoneSubId)) {
-            networkType = android.provider.Settings.Global.getInt(context.getContentResolver(),
-                    android.provider.Settings.Global.PREFERRED_NETWORK_MODE + phoneSubId,
-                    phoneIdNetworkType);
-
-            // Get users NW type, let it override if its not the default NW mode (-1)
-            int userNwType = SubscriptionController.getInstance().getUserNwMode(phoneSubId);
-            if (userNwType != SubscriptionManager.DEFAULT_NW_MODE && userNwType != networkType) {
-                Rlog.d(LOG_TAG, "calculatePreferredNetworkType: overriding for usernw mode " +
-                        "phoneSubId = " + phoneSubId + " networkType = " + networkType);
-                networkType = userNwType;
-            }
-
-            //Update phone id based network type with Sub ID based.
-            if (networkType != phoneIdNetworkType) {
-                TelephonyManager.putIntAtIndex(context.getContentResolver(),
-                        Settings.Global.PREFERRED_NETWORK_MODE, phoneId,
-                        networkType);
-            }
-        } else {
-            Rlog.d(LOG_TAG, "calculatePreferredNetworkType: phoneSubId = " + phoneSubId +
-                    " is not a active SubId");
-        }
+        int networkType = android.provider.Settings.Global.getInt(context.getContentResolver(),
+                android.provider.Settings.Global.PREFERRED_NETWORK_MODE + phoneSubId,
+                RILConstants.PREFERRED_NETWORK_MODE);
         Rlog.d(LOG_TAG, "calculatePreferredNetworkType: phoneSubId = " + phoneSubId +
                 " networkType = " + networkType);
         return networkType;
@@ -608,9 +619,5 @@ public class PhoneFactory {
             }
             ipw.flush();
         }
-    }
-
-    public static SubscriptionInfoUpdater getSubscriptionInfoUpdater() {
-        return sSubInfoRecordUpdater;
     }
 }

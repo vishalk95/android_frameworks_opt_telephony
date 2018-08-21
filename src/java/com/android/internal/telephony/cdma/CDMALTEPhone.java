@@ -32,18 +32,18 @@ import android.os.PowerManager;
 import android.os.SystemProperties;
 import android.provider.Telephony;
 import android.text.TextUtils;
+import android.telephony.ServiceState;
 import android.telephony.SubscriptionManager;
 import android.telephony.Rlog;
-import android.telephony.ServiceState;
 
 import com.android.internal.telephony.CommandsInterface;
 
 import android.telephony.TelephonyManager;
 
-import com.android.internal.telephony.TelephonyPluginDelegate;
 import com.android.internal.telephony.dataconnection.DcTracker;
 import com.android.internal.telephony.MccTable;
 import com.android.internal.telephony.OperatorInfo;
+import com.android.internal.telephony.PhoneBase;
 import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.PhoneNotifier;
 import com.android.internal.telephony.PhoneProxy;
@@ -91,7 +91,7 @@ public class CDMALTEPhone extends CDMAPhone {
 
         Rlog.d(LOG_TAG, "CDMALTEPhone: constructor: sub = " + mPhoneId);
 
-        mDcTracker = TelephonyPluginDelegate.getInstance().makeDcTracker(this);
+        mDcTracker = new DcTracker(this);
 
     }
 
@@ -154,10 +154,10 @@ public class CDMALTEPhone extends CDMAPhone {
             // removeReferences() have already been called
 
             ret = PhoneConstants.DataState.DISCONNECTED;
-        } else if (mSST.getCurrentDataConnectionState() != ServiceState.STATE_IN_SERVICE &&
-                            mOosIsDisconnect) {
+        } else if (mSST.getCurrentDataConnectionState() != ServiceState.STATE_IN_SERVICE) {
+            // 1. If we're out of service, open TCP sockets may still work
+            // 2. If we're out of service, but DcTracker is not set to idle or disconnect.
             ret = PhoneConstants.DataState.DISCONNECTED;
-            log("getDataConnectionState: Data is Out of Service. ret = " + ret);
         } else if (mDcTracker.isApnTypeEnabled(apnType) == false) {
             ret = PhoneConstants.DataState.DISCONNECTED;
         } else {
@@ -175,6 +175,23 @@ public class CDMALTEPhone extends CDMAPhone {
                         ret = PhoneConstants.DataState.SUSPENDED;
                     } else {
                         ret = PhoneConstants.DataState.CONNECTED;
+                    }
+
+                    // M: check peer phone is in call also
+                    int phoneCount = TelephonyManager.getDefault().getPhoneCount();
+                    if (TelephonyManager.getDefault().isMultiSimEnabled()
+                            && SystemProperties.getInt("ro.mtk_dt_support", 0) != 1) {
+                        for (int i = 0; i < phoneCount; i++) {
+                            PhoneBase pb = getActivePhone(i);
+                            if (pb != null && i != getPhoneId() &&
+                                    pb.getState() != PhoneConstants.State.IDLE) {
+                                Rlog.d(LOG_TAG, "CDMALTEPhone[" + getPhoneId() + "] Phone" + i +
+                                        " is in call");
+                                Rlog.d(LOG_TAG, "Data state set to SUSPENDED");
+                                ret = PhoneConstants.DataState.SUSPENDED;
+                                break;
+                            }
+                        }
                     }
                     break;
 
@@ -420,7 +437,7 @@ public class CDMALTEPhone extends CDMAPhone {
                 curIccRecords = mIccRecords.get();
                 if (curIccRecords != null && (curIccRecords instanceof RuimRecords)) {
                     RuimRecords csim = (RuimRecords) curIccRecords;
-                    operatorNumeric = csim.getOperatorNumeric();
+                    operatorNumeric = csim.getRUIMOperatorNumeric();
                 }
             }
         }
@@ -473,5 +490,27 @@ public class CDMALTEPhone extends CDMAPhone {
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
         pw.println("CDMALTEPhone extends:");
         super.dump(fd, pw, args);
+    }
+
+    /**
+     * CDMALTEPhone getDeviceId method will return IMEI/MIED.
+     * When LteOnCdmaMode == LTE_ON_CDMA_TRUE,google CTS need return IMEI
+     * Otherwise return MEID or ESN.
+     * @return imei or meid
+     */
+    @Override
+    public String getDeviceId() {
+        if (getLteOnCdmaMode() == PhoneConstants.LTE_ON_CDMA_TRUE) {
+            Rlog.d(LOG_TAG, "getDeviceId() in CDMALTEPhone  : return Imei");
+            return getImei();
+        } else {
+            Rlog.d(LOG_TAG, "getDeviceId() in CDMALTEPhone: return getMeid()");
+            String id = getMeid();
+            if ((id == null) || id.matches("^0*$")) {
+                Rlog.d(LOG_TAG, "getDeviceId() in CDMALTEPhone: MEID is not initialized use ESN");
+                id = getEsn();
+            }
+            return id;
+        }
     }
 }

@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2010 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +49,10 @@ import com.android.internal.telephony.PhoneNotifier;
 import java.text.ParseException;
 import java.util.List;
 import java.util.regex.Pattern;
+
+/// M: CC068: Override SIP getUSSInfo as null since not supported @{
+import com.android.internal.telephony.UUSInfo;
+/// @}
 
 /**
  * {@hide}
@@ -215,6 +224,20 @@ public class SipPhone extends SipPhoneBase {
     @Override
     public void switchHoldingAndActive() throws CallStateException {
         if (DBG) log("switchHoldingAndActive: switch fg and bg");
+        /// M: CC061: Check SIP frgnd call's state before swap/separate call to avoid JE @{
+        /// [ALPS00041991]
+        synchronized (SipPhone.class) {
+           if ((mForegroundCall.getState() == SipCall.State.DIALING)) {
+                throw new CallStateException("wrong state to swap calls: fg="
+                        + mForegroundCall.getState() + ", bg="
+                        + mBackgroundCall.getState());
+           }
+
+           if (!mForegroundCall.isInCallOrIdle() || !mBackgroundCall.isInCallOrIdle())
+               throw new CallStateException("wrong state to swap calls");
+        }
+        /// @}
+
         synchronized (SipPhone.class) {
             mForegroundCall.switchWith(mBackgroundCall);
             if (mBackgroundCall.getState().isAlive()) mBackgroundCall.hold();
@@ -248,6 +271,13 @@ public class SipPhone extends SipPhoneBase {
                 throw new CallStateException("expect " + SipCall.class
                         + ", cannot merge with " + that.getClass());
             }
+            /// M: CC062: Check SIP call state before conference @{
+            if ((mForegroundCall.getState() != SipCall.State.ACTIVE)) {
+                throw new CallStateException("wrong state to merge calls: fg="
+                        + mForegroundCall.getState() + ", bg="
+                        + mBackgroundCall.getState());
+            }
+            /// @}
             mForegroundCall.merge((SipCall) that);
         }
     }
@@ -428,6 +458,16 @@ public class SipPhone extends SipPhoneBase {
         Rlog.e(LOG_TAG, s, e);
     }
 
+    /// M: CC010: Add RIL interface @{
+    public void hangupAll() throws CallStateException {
+        synchronized (SipPhone.class) {
+            mForegroundCall.hangup();
+            mBackgroundCall.hangup();
+            mRingingCall.hangup();
+        }
+    }
+    /// @}
+
     private class SipCall extends SipCallBase {
         private static final String SC_TAG = "SipCall";
         private static final boolean SC_DBG = true;
@@ -492,6 +532,10 @@ public class SipPhone extends SipPhoneBase {
                 return c;
             } catch (ParseException e) {
                 throw new SipException("dial", e);
+            /// M: CC063: Catch all other exceptions for SIP dial @{
+            } catch (Exception ee) {
+                throw new SipException("dial", ee);
+            /// @}
             }
         }
 
@@ -676,9 +720,34 @@ public class SipPhone extends SipPhoneBase {
                 } else if (mState == Call.State.ALERTING) {
                     stopRingbackTone();
                 }
+
+                /// M: CC060: [ALPS00093395] Notify SIP call RING @{
+                // Start sip phone ring.
+                if (newState == Call.State.INCOMING) {
+                    Rlog.d(LOG_TAG, "Start the SIP phone ring");
+                    notifySipCallRing();
+                } else if (mState != Call.State.INCOMING && newState == Call.State.DISCONNECTED && mConnections.size() == 1) {
+                    if (SipPhone.this.getRingingCall().isRinging()) {
+                        Rlog.d(LOG_TAG, "Start the SIP phone ring after the call is ended");
+                        /* For solving ALPS00542520, change the state of ringing call from WAITING to INCOMING
+                           when there is no more foreground and background call */
+                        if (mRingingCall.getState() == Call.State.WAITING) {
+                            mRingingCall.mState = Call.State.INCOMING;
+                            Rlog.d(LOG_TAG, "[setState]Change WAITING to INCOMING.  New state = " + mRingingCall.mState);
+                        }
+                        notifySipCallRing();
+                    }
+                }
+                /// @}
+
                 mState = newState;
                 updatePhoneState();
                 notifyPreciseCallStateChanged();
+
+                /// M: CC064: Trigger SIP notifyphoneStateChanged when ACTIVE @{
+                if (mState == Call.State.ACTIVE)
+                    notifyPhoneStateChanged();
+                /// @}
             }
         }
 
@@ -707,8 +776,36 @@ public class SipPhone extends SipPhoneBase {
                 }
                 if (allConnectionsDisconnected) setState(State.DISCONNECTED);
             }
+            /// M: CC065: [ALPS01753359] Remove SIP connection from mConnections when ended @{
+            mConnections.remove(conn);
+            /// @}
             notifyDisconnectP(conn);
         }
+
+        /// M: CC061: Check SIP frgnd call's state before swap/separate call to avoid JE @{
+        /// [ALPS00041991]
+        /**
+          * Helper method used to call operation, switchHoldingAndActive and seperate;
+          * @return true if one of the following conditions happens,
+          * (1) The call is in IN_CALL state.
+          * (2) There is no connection attached to the call, i.e. in IDLE state
+          */
+        boolean isInCallOrIdle() {
+            if (SC_DBG) log("isInCallOrIdle: conn.size=" + mConnections.size());
+            for (Connection c : mConnections) {
+                if (SC_DBG) log("isInCallOrIdle: conn=" + c);
+                SipAudioCall sipAudioCall = ((SipConnection) c).getSipAudioCall();
+                if (sipAudioCall == null)
+                    return false;
+                SipSession sipSession = sipAudioCall.getSipSession();
+                if (sipSession == null)
+                    return false;
+                if (sipSession.getState() != SipSession.State.IN_CALL)
+                    return false;
+            }
+            return true;
+        }
+        /// @}
 
         private AudioGroup getAudioGroup() {
             if (mConnections.isEmpty()) return null;
@@ -803,6 +900,17 @@ public class SipPhone extends SipPhoneBase {
             @Override
             protected void onError(int cause) {
                 if (SCN_DBG) log("onError: " + cause);
+
+                /// M: CC066: [ALPS00036160] Delay SIP disconnect message @{
+                // to avoid "Server unreachable" when dialing out a wrong server address
+                try {
+                    if (cause == DisconnectCause.SERVER_UNREACHABLE) {
+                        Thread.sleep(1000);
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                /// @}
                 onCallEnded(cause);
             }
         };
@@ -855,6 +963,14 @@ public class SipPhone extends SipPhoneBase {
             return mSipAudioCall.getAudioGroup();
         }
 
+        /// M: CC061: Check SIP frgnd call's state before swap/separate call to avoid JE @{
+        /// [ALPS00041991]
+        SipAudioCall getSipAudioCall() {
+            if (mSipAudioCall == null) return null;
+            return mSipAudioCall;
+        }
+        /// @}
+
         void dial() throws SipException {
             setState(Call.State.DIALING);
             mSipAudioCall = mSipManager.makeAudioCall(mProfile, mPeer, null,
@@ -863,21 +979,51 @@ public class SipPhone extends SipPhoneBase {
         }
 
         void hold() throws CallStateException {
-            setState(Call.State.HOLDING);
-            try {
-                mSipAudioCall.holdCall(TIMEOUT_HOLD_CALL);
-            } catch (SipException e) {
-                throw new CallStateException("hold(): " + e);
+            synchronized (SipPhone.class) {
+                /// M: CC067: Check SIP connection state to avoid un/holding a disconnected call @{
+                ///  [ALPS01002558]
+                if (mSipAudioCall == null) {
+                    Call.State currentState = getState();
+                    log("SipConnection.hold():mSipAudioCall is null, state=" + currentState);
+                    if (currentState == Call.State.DISCONNECTED) {
+                        //This sipConnection is already DISCONNECTED -> Can't be held, do nothing & return directly
+                        return;
+                    } else {
+                        throw new CallStateException("unhold(): mSipAudioCall is null");
+                    }
+                }
+                /// @}
+                setState(Call.State.HOLDING);
+                try {
+                    mSipAudioCall.holdCall(TIMEOUT_HOLD_CALL);
+                } catch (SipException e) {
+                    throw new CallStateException("hold(): " + e);
+                }
             }
         }
 
         void unhold(AudioGroup audioGroup) throws CallStateException {
-            mSipAudioCall.setAudioGroup(audioGroup);
-            setState(Call.State.ACTIVE);
-            try {
-                mSipAudioCall.continueCall(TIMEOUT_HOLD_CALL);
-            } catch (SipException e) {
-                throw new CallStateException("unhold(): " + e);
+            synchronized (SipPhone.class) {
+                /// M: CC067: Check SIP connection state to avoid un/holding a disconnected call @{
+                ///  [ALPS01002558]
+                if (mSipAudioCall == null) {
+                    Call.State currentState = getState();
+                    log("SipConnection.unhold():mSipAudioCall is null, state=" + currentState);
+                    if (currentState == Call.State.DISCONNECTED) {
+                        //This sipConnection is already DISCONNECTED -> Can't be held, do nothing & return directly
+                        return;
+                    } else {
+                        throw new CallStateException("unhold(): mSipAudioCall is null");
+                    }
+                }
+                /// @}
+                mSipAudioCall.setAudioGroup(audioGroup);
+                setState(Call.State.ACTIVE);
+                try {
+                    mSipAudioCall.continueCall(TIMEOUT_HOLD_CALL);
+                } catch (SipException e) {
+                    throw new CallStateException("unhold(): " + e);
+                }
             }
         }
 
@@ -954,6 +1100,7 @@ public class SipPhone extends SipPhoneBase {
 
         @Override
         public void separate() throws CallStateException {
+            if (DBG) log("separate");
             synchronized (SipPhone.class) {
                 SipCall call = (getPhone() == SipPhone.this)
                         ? (SipCall) getBackgroundCall()
@@ -966,6 +1113,12 @@ public class SipPhone extends SipPhoneBase {
                 if (SCN_DBG) log("separate: conn="
                         + mPeer.getUriString() + " from " + mOwner + " back to "
                         + call);
+
+                /// M: CC061: Check SIP frgnd call's state before swap/separate call to avoid JE @{
+                /// [ALPS00041991]
+                if (!mForegroundCall.isInCallOrIdle() || !mBackgroundCall.isInCallOrIdle())
+                    throw new CallStateException("wrong state to separate call");
+                /// @}
 
                 // separate the AudioGroup and connection from the original call
                 Phone originalPhone = getPhone();
@@ -987,6 +1140,13 @@ public class SipPhone extends SipPhoneBase {
         private void log(String s) {
             Rlog.d(SCN_TAG, s);
         }
+
+        /// M: CC068: Override SIP getUSSInfo as null since not supported @{
+        @Override
+        public UUSInfo getUUSInfo() {
+            return null;
+        }
+        /// @}
     }
 
     private abstract class SipAudioCallAdapter extends SipAudioCall.Listener {

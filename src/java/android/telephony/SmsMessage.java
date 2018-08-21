@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2008 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,7 +24,6 @@ package android.telephony;
 import android.os.Binder;
 import android.os.Parcel;
 import android.content.res.Resources;
-import android.telephony.SubscriptionManager;
 import android.text.TextUtils;
 
 import com.android.internal.telephony.GsmAlphabet;
@@ -35,6 +39,9 @@ import java.util.Arrays;
 
 import static android.telephony.TelephonyManager.PHONE_TYPE_CDMA;
 
+// MTK-START
+import com.android.internal.telephony.SmsHeader;
+// MTK-END
 
 /**
  * A Short Message Service message.
@@ -61,6 +68,33 @@ public class SmsMessage {
      * @hide This value is not defined in global standard. Only in Korea, this is used.
      */
     public static final int ENCODING_KSC5601 = 4;
+
+    // MTK-START
+    /*
+     * Detail description:
+     * Constants for message waiting indication type
+     */
+    /** Message Waiting Indication
+     *  @hide
+     */
+    public static final int MWI_VOICEMAIL = 0;
+    /** Message Waiting Indication
+     *  @hide
+     */
+    public static final int MWI_FAX = 1;
+    /** Message Waiting Indication
+     *  @hide
+     */
+    public static final int MWI_EMAIL = 2;
+    /** Message Waiting Indication
+     *  @hide
+     */
+    public static final int MWI_OTHER = 3;
+    /** Message Waiting Indication
+     *  @hide
+     */
+    public static final int MWI_VIDEO = 7;
+    // MTK-END
 
     /** The maximum number of payload bytes per message */
     public static final int MAX_USER_DATA_BYTES = 140;
@@ -259,32 +293,6 @@ public class SmsMessage {
     }
 
     /**
-     * Create an SmsMessage from an SMS EF record.
-     *
-     * @param index Index of SMS record. This should be index in ArrayList
-     *              returned by SmsManager.getAllMessagesFromSim + 1.
-     * @param data Record data.
-     * @param subId Subscription Id of the SMS
-     * @return An SmsMessage representing the record.
-     *
-     * @hide
-     */
-    public static SmsMessage createFromEfRecord(int index, byte[] data, int subId) {
-        SmsMessageBase wrappedMessage;
-
-        if (isCdmaVoice(subId)) {
-            wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.createFromEfRecord(
-                    index, data);
-        } else {
-            wrappedMessage = com.android.internal.telephony.gsm.SmsMessage.createFromEfRecord(
-                    index, data);
-        }
-
-        return wrappedMessage != null ? new SmsMessage(wrappedMessage) : null;
-    }
-
-
-    /**
      * Get the TP-Layer-Length for the given SMS-SUBMIT PDU Basically, the
      * length in bytes (not hex chars) less the SMSC header
      *
@@ -481,28 +489,9 @@ public class SmsMessage {
      */
     public static SubmitPdu getSubmitPdu(String scAddress,
             String destinationAddress, String message, boolean statusReportRequested) {
-        return getSubmitPdu(scAddress, destinationAddress, message, statusReportRequested,
-                SubscriptionManager.getDefaultSmsSubId());
-    }
-
-    /**
-     * Get an SMS-SUBMIT PDU for a destination address and a message.
-     * This method will not attempt to use any GSM national language 7 bit encodings.
-     *
-     * @param scAddress Service Centre address.  Null means use default.
-     * @param destinationAddress the address of the destination for the message.
-     * @param message String representation of the message payload.
-     * @param statusReportRequested Indicates whether a report is requested for this message.
-     * @param subId Subscription of the message
-     * @return a <code>SubmitPdu</code> containing the encoded SC
-     *         address, if applicable, and the encoded message.
-     *         Returns null on encode error.
-     * @hide
-     */
-    public static SubmitPdu getSubmitPdu(String scAddress,
-            String destinationAddress, String message, boolean statusReportRequested, int subId) {
         SubmitPduBase spb;
-        if (useCdmaFormatForMoSms(subId)) {
+
+        if (useCdmaFormatForMoSms()) {
             spb = com.android.internal.telephony.cdma.SmsMessage.getSubmitPdu(scAddress,
                     destinationAddress, message, statusReportRequested, null);
         } else {
@@ -555,7 +544,7 @@ public class SmsMessage {
      * form or null if unavailable
      */
     public String getOriginatingAddress() {
-        return mWrappedSmsMessage != null ? mWrappedSmsMessage.getOriginatingAddress() : null;
+        return mWrappedSmsMessage.getOriginatingAddress();
     }
 
     /**
@@ -609,7 +598,7 @@ public class SmsMessage {
      * Returns the service centre timestamp in currentTimeMillis() format
      */
     public long getTimestampMillis() {
-        return mWrappedSmsMessage != null ? mWrappedSmsMessage.getTimestampMillis() : 0;
+        return mWrappedSmsMessage.getTimestampMillis();
     }
 
     /**
@@ -795,27 +784,12 @@ public class SmsMessage {
      * @return true if Cdma format should be used for MO SMS, false otherwise.
      */
     private static boolean useCdmaFormatForMoSms() {
-        // IMS is registered with SMS support, check the SMS format supported
-        return useCdmaFormatForMoSms(SubscriptionManager.getDefaultSmsSubId());
-    }
-
-    /**
-     * Determines whether or not to use CDMA format for MO SMS.
-     * If SMS over IMS is supported, then format is based on IMS SMS format,
-     * otherwise format is based on current phone type.
-     *
-     * @param subId Subscription for which phone type is returned.
-     *
-     * @return true if Cdma format should be used for MO SMS, false otherwise.
-     */
-    private static boolean useCdmaFormatForMoSms(int subId) {
-        SmsManager smsManager = SmsManager.getSmsManagerForSubscriptionId(subId);
-        if (!smsManager.isImsSmsSupported()) {
+        if (!SmsManager.getDefault().isImsSmsSupported()) {
             // use Voice technology to determine SMS format.
-            return isCdmaVoice(subId);
+            return isCdmaVoice();
         }
         // IMS is registered with SMS support, check the SMS format supported
-        return (SmsConstants.FORMAT_3GPP2.equals(smsManager.getImsSmsFormat()));
+        return (SmsConstants.FORMAT_3GPP2.equals(SmsManager.getDefault().getImsSmsFormat()));
     }
 
     /**
@@ -824,17 +798,7 @@ public class SmsMessage {
      * @return true if current phone type is cdma, false otherwise.
      */
     private static boolean isCdmaVoice() {
-        return isCdmaVoice(SubscriptionManager.getDefaultSmsSubId());
-    }
-
-    /**
-     * Determines whether or not to current phone type is cdma.
-     *
-     * @param subId Subscription Id of the SMS
-     * @return true if current phone type is cdma, false otherwise.
-     */
-    private static boolean isCdmaVoice(int subId) {
-        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType(subId);
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
         return (PHONE_TYPE_CDMA == activePhone);
     }
 
@@ -942,12 +906,464 @@ public class SmsMessage {
         return false;
     }
 
-    /**
-     * {@hide}
-     * Returns the recipient address(receiver) of this SMS message in String form or null if
-     * unavailable.
+    // MTK-START
+    /** This method returns the reference to a specific
+     *  SmsMessage object, which is used for accessing its static methods.
+     * @return Specific SmsMessage.
+     *
+     * @hide
      */
-    public String getRecipientAddress() {
-        return mWrappedSmsMessage.getRecipientAddress();
+    private static final SmsMessageBase getSmsFacility() {
+        if (isCdmaVoice()) {
+            return new com.android.internal.telephony.cdma.SmsMessage();
+        } else {
+            return new com.android.internal.telephony.gsm.SmsMessage();
+        }
     }
+
+    /**
+     * Constructor
+     *
+     * @hide
+     */
+    public SmsMessage() {
+        this(getSmsFacility());
+    }
+
+    /** @hide */
+    public static SmsMessage newFromCDS(String line) {
+        // received SMS delivery report in 3GPP format
+        SmsMessageBase wrappedMessage =
+                com.android.internal.telephony.gsm.SmsMessage.newFromCDS(line);
+
+        return new SmsMessage(wrappedMessage);
+    }
+
+    /**
+     * Get an SMS-SUBMIT PDU for a destination address and a message
+     *
+     * @param scAddress Service Centre address.  Null means use default.
+     * @return a <code>SubmitPdu</code> containing the encoded SC
+     *         address, if applicable, and the encoded message.
+     *         Returns null on encode error.
+     * @hide
+     */
+    public static SubmitPdu getSubmitPdu(String scAddress,
+            String destinationAddress, String message,
+            boolean statusReportRequested, byte[] header) {
+        SubmitPduBase spb;
+        if (useCdmaFormatForMoSms()) {
+            spb = com.android.internal.telephony.cdma.SmsMessage.getSubmitPdu(scAddress,
+                    destinationAddress, message, statusReportRequested,
+                    SmsHeader.fromByteArray(header));
+        } else {
+            spb = com.android.internal.telephony.gsm.SmsMessage.getSubmitPdu(scAddress,
+                    destinationAddress, message, statusReportRequested, header);
+        }
+
+        return new SubmitPdu(spb);
+    }
+
+    /**
+     * Get an SMS-SUBMIT PDU for a data message to a destination address with original port
+     *
+     * @param scAddress Service Centre address. null == use default
+     * @param destinationAddress the address of the destination for the message
+     * @param destinationPort the port to deliver the message to at the
+     *        destination
+     * @param originalPort the port to deliver the message from
+     * @param data the data for the message
+     * @return a <code>SubmitPdu</code> containing the encoded SC
+     *         address, if applicable, and the encoded message.
+     *         Returns null on encode error.
+     *
+     * @hide
+     */
+    public static SubmitPdu getSubmitPdu(String scAddress, String destinationAddress,
+                short destinationPort, short originalPort, byte[] data,
+                boolean statusReportRequested) {
+        Rlog.d(LOG_TAG, "[xj android.telephony.SmsMessage getSubmitPdu");
+        SubmitPduBase spb;
+        if (useCdmaFormatForMoSms()) {
+            spb = com.android.internal.telephony.cdma.SmsMessage.getSubmitPdu(scAddress,
+                    destinationAddress, destinationPort, data, statusReportRequested);
+        } else {
+            spb = com.android.internal.telephony.gsm.SmsMessage.getSubmitPdu(scAddress,
+                    destinationAddress, destinationPort, originalPort, data, statusReportRequested);
+        }
+
+        if (spb != null) {
+            return new SubmitPdu(spb);
+        }
+        return null;
+    }
+
+    /**
+     * @return the destination address (receiver) of this SMS message in String
+     * form or null if unavailable
+     *
+     * @hide
+     * @internal
+     */
+    public String getDestinationAddress() {
+        return mWrappedSmsMessage.getDestinationAddress();
+    }
+
+    /**
+     * Return the user data header (UDH).
+     *
+     * @hide
+     * @internal
+     */
+    public SmsHeader getUserDataHeader() {
+        return mWrappedSmsMessage.getUserDataHeader();
+    }
+
+    /**
+     * Returns the smsc raw data from the pdu
+     *
+     * @return the raw smsc for the message.
+     *
+     * @hide
+     * @internal
+     */
+    public byte[] getSmsc() {
+        Rlog.d(LOG_TAG, "getSmsc");
+        byte[] pdu = this.getPdu();
+
+        if (isCdma()) {
+            Rlog.d(LOG_TAG, "getSmsc with CDMA and return null");
+            return null;
+        }
+
+        if (pdu == null) {
+            Rlog.d(LOG_TAG, "pdu is null");
+            return null;
+        }
+
+        int smscLen = (pdu[0] & 0xff) + 1;
+        byte[] smsc = new byte[smscLen];
+
+        try {
+            System.arraycopy(pdu, 0, smsc, 0, smsc.length);
+            return smsc;
+        } catch (ArrayIndexOutOfBoundsException e) {
+            Rlog.e(LOG_TAG, "Out of boudns");
+            return null;
+        }
+    }
+
+    /**
+     * Returns the tpdu from the pdu
+     *
+     * @return the tpdu for the message.
+     *
+     * @hide
+     * @internal
+     */
+    public byte[] getTpdu() {
+        Rlog.d(LOG_TAG, "getTpdu");
+        byte[] pdu = this.getPdu();
+
+        if (isCdma()) {
+            Rlog.d(LOG_TAG, "getSmsc with CDMA and return null");
+            return pdu;
+        }
+
+        if (pdu == null) {
+            Rlog.d(LOG_TAG, "pdu is null");
+            return null;
+        }
+
+        int smscLen = (pdu[0] & 0xff) + 1;
+        int tpduLen = pdu.length - smscLen;
+        byte[] tpdu = new byte[tpduLen];
+
+        try {
+            System.arraycopy(pdu, smscLen, tpdu, 0, tpdu.length);
+            return tpdu;
+        } catch (ArrayIndexOutOfBoundsException e) {
+            Rlog.e(LOG_TAG, "Out of boudns");
+            return null;
+        }
+    }
+
+    /**
+     * Calculates the number of SMS's required to encode the message body and
+     * the number of characters remaining until the next message.
+     *
+     * @param msgBody the message to encode
+     * @param use7bitOnly if true, characters that are not part of the
+     *         radio-specific 7-bit encoding are counted as single
+     *         space chars.  If false, and if the messageBody contains
+     *         non-7-bit encodable characters, length is calculated
+     *         using a 16-bit encoding.
+     * @param encodingType text encoding type(7-bit, 16-bit or automatic)
+     * @return an int[4] with int[0] being the number of SMS's
+     *         required, int[1] the number of code units used, and
+     *         int[2] is the number of code units remaining until the
+     *         next message. int[3] is an indicator of the encoding
+     *         code unit size (see the ENCODING_* definitions in this
+     *         class).
+     * @hide
+     * @internal
+     */
+    public static int[] calculateLength(CharSequence msgBody, boolean use7bitOnly,
+            int encodingType) {
+        TextEncodingDetails ted = (useCdmaFormatForMoSms()) ?
+                com.android.internal.telephony.cdma.SmsMessage.calculateLength(
+                msgBody, use7bitOnly, encodingType) :
+                com.android.internal.telephony.gsm.SmsMessage.calculateLength(
+                msgBody, use7bitOnly, encodingType);
+        int ret[] = new int[4];
+        ret[0] = ted.msgCount;
+        ret[1] = ted.codeUnitCount;
+        ret[2] = ted.codeUnitsRemaining;
+        ret[3] = ted.codeUnitSize;
+        return ret;
+    }
+
+    /**
+     * Divide a message text into several fragments, none bigger than
+     * the maximum SMS message text size.
+     *
+     * @param text text, must not be null.
+     * @param encodingType text encoding type(7-bit, 16-bit or automatic)
+     * @return an <code>ArrayList</code> of strings that, in order,
+     *   comprise the original msg text
+     *
+     * @hide
+     */
+    public static ArrayList<String> fragmentText(String text, int encodingType) {
+        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        TextEncodingDetails ted = (useCdmaFormatForMoSms()) ?
+                com.android.internal.telephony.cdma.SmsMessage.calculateLength(
+                text, false, encodingType) :
+                com.android.internal.telephony.gsm.SmsMessage.calculateLength(
+                text, false, encodingType);
+
+        // TODO(cleanup): The code here could be rolled into the logic
+        // below cleanly if these MAX_* constants were defined more
+        // flexibly...
+
+        int limit;
+        if (ted.codeUnitSize == SmsConstants.ENCODING_7BIT) {
+            int udhLength;
+            if (ted.languageTable != 0 && ted.languageShiftTable != 0) {
+                udhLength = GsmAlphabet.UDH_SEPTET_COST_TWO_SHIFT_TABLES;
+            } else if (ted.languageTable != 0 || ted.languageShiftTable != 0) {
+                udhLength = GsmAlphabet.UDH_SEPTET_COST_ONE_SHIFT_TABLE;
+            } else {
+                udhLength = 0;
+            }
+
+            if (ted.msgCount > 1) {
+                udhLength += GsmAlphabet.UDH_SEPTET_COST_CONCATENATED_MESSAGE;
+            }
+
+            if (udhLength != 0) {
+                udhLength += GsmAlphabet.UDH_SEPTET_COST_LENGTH;
+            }
+
+            limit = SmsConstants.MAX_USER_DATA_SEPTETS - udhLength;
+        } else {
+            if (ted.msgCount > 1) {
+                limit = SmsConstants.MAX_USER_DATA_BYTES_WITH_HEADER;
+                // If EMS is not supported, break down EMS into single segment SMS
+                // and add page info " x/y".
+                // In the case of UCS2 encoding, we need 8 bytes for this,
+                // but we only have 6 bytes from UDH, so truncate the limit for
+                // each segment by 2 bytes (1 char).
+                // Make sure total number of segments is less than 10.
+                if (!hasEmsSupport() && ted.msgCount < 10) {
+                    limit -= 2;
+                }
+            } else {
+                limit = SmsConstants.MAX_USER_DATA_BYTES;
+            }
+        }
+
+        String newMsgBody = null;
+        Resources r = Resources.getSystem();
+        if (r.getBoolean(com.android.internal.R.bool.config_sms_force_7bit_encoding)) {
+            newMsgBody  = Sms7BitEncodingTranslator.translate(text);
+        }
+        if (TextUtils.isEmpty(newMsgBody)) {
+            newMsgBody = text;
+        }
+        int pos = 0;  // Index in code units.
+        int textLen = newMsgBody.length();
+        ArrayList<String> result = new ArrayList<String>(ted.msgCount);
+        while (pos < textLen) {
+            int nextPos = 0;  // Counts code units.
+            if (ted.codeUnitSize == SmsConstants.ENCODING_7BIT) {
+                if (useCdmaFormatForMoSms() && ted.msgCount == 1) {
+                    // For a singleton CDMA message, the encoding must be ASCII...
+                    nextPos = pos + Math.min(limit, textLen - pos);
+                } else {
+                    // For multi-segment messages, CDMA 7bit equals GSM 7bit encoding (EMS mode).
+                    nextPos = GsmAlphabet.findGsmSeptetLimitIndex(newMsgBody, pos, limit,
+                            ted.languageTable, ted.languageShiftTable);
+                }
+            } else {  // Assume unicode.
+                nextPos = SmsMessageBase.findNextUnicodePosition(pos, limit, newMsgBody);
+            }
+            if ((nextPos <= pos) || (nextPos > textLen)) {
+                Rlog.e(LOG_TAG, "fragmentText failed (" + pos + " >= " + nextPos + " or " +
+                          nextPos + " >= " + textLen + ")");
+                break;
+            }
+            result.add(newMsgBody.substring(pos, nextPos));
+            pos = nextPos;
+        }
+        return result;
+    }
+
+    /**
+     * Divide a message text into several fragments, none bigger than
+     * the maximum SMS message text size using TextEncodingDetails.
+     *
+     * @param subId subscription identity
+     * @param text text, must not be null.
+     * @param ted text encodingdetails
+     *
+     * @return an <code>ArrayList</code> of strings that, in order,
+     *   comprise the original msg text
+     *
+     * @hide
+     */
+    public ArrayList<String> fragmentTextUsingTed(int subId, String text,
+            TextEncodingDetails ted) {
+        boolean useCdmaFormat = false;
+
+        if (!SmsManager.getSmsManagerForSubscriptionId(subId).isImsSmsSupported()) {
+            // use Voice technology to determine SMS format.
+            useCdmaFormat = (TelephonyManager.getDefault().getCurrentPhoneType()
+                    == TelephonyManager.PHONE_TYPE_CDMA);
+        } else {
+            // IMS is registered with SMS support, check the SMS format supported
+            useCdmaFormat = (SmsConstants.FORMAT_3GPP2.
+                    equals(SmsManager.getSmsManagerForSubscriptionId(subId).getImsSmsFormat()));
+        }
+
+        int limit;
+        if (ted.codeUnitSize == SmsConstants.ENCODING_7BIT) {
+            int udhLength;
+            if (ted.languageTable != 0 && ted.languageShiftTable != 0) {
+                udhLength = GsmAlphabet.UDH_SEPTET_COST_TWO_SHIFT_TABLES;
+            } else if (ted.languageTable != 0 || ted.languageShiftTable != 0) {
+                udhLength = GsmAlphabet.UDH_SEPTET_COST_ONE_SHIFT_TABLE;
+            } else {
+                udhLength = 0;
+            }
+
+            if (ted.msgCount > 1) {
+                udhLength += GsmAlphabet.UDH_SEPTET_COST_CONCATENATED_MESSAGE;
+            }
+
+            if (udhLength != 0) {
+                udhLength += GsmAlphabet.UDH_SEPTET_COST_LENGTH;
+            }
+
+            limit = SmsConstants.MAX_USER_DATA_SEPTETS - udhLength;
+        } else {
+            if (ted.msgCount > 1) {
+                limit = SmsConstants.MAX_USER_DATA_BYTES_WITH_HEADER;
+                // If EMS is not supported, break down EMS into single segment SMS
+                // and add page info " x/y".
+                // In the case of UCS2 encoding, we need 8 bytes for this,
+                // but we only have 6 bytes from UDH, so truncate the limit for
+                // each segment by 2 bytes (1 char).
+                // Make sure total number of segments is less than 10.
+                if (!hasEmsSupport() && ted.msgCount < 10) {
+                    limit -= 2;
+                }
+            } else {
+                limit = SmsConstants.MAX_USER_DATA_BYTES;
+            }
+        }
+
+        String newMsgBody = null;
+        Resources r = Resources.getSystem();
+        if (r.getBoolean(com.android.internal.R.bool.config_sms_force_7bit_encoding)) {
+            newMsgBody  = Sms7BitEncodingTranslator.translate(text);
+        }
+        if (TextUtils.isEmpty(newMsgBody)) {
+            newMsgBody = text;
+        }
+        int pos = 0;  // Index in code units.
+        int textLen = newMsgBody.length();
+        ArrayList<String> result = new ArrayList<String>(ted.msgCount);
+        while (pos < textLen) {
+            int nextPos = 0;  // Counts code units.
+            if (ted.codeUnitSize == SmsConstants.ENCODING_7BIT) {
+                if (useCdmaFormat && ted.msgCount == 1) {
+                    // For a singleton CDMA message, the encoding must be ASCII...
+                    nextPos = pos + Math.min(limit, textLen - pos);
+                } else {
+                    // For multi-segment messages, CDMA 7bit equals GSM 7bit encoding (EMS mode).
+                    nextPos = GsmAlphabet.findGsmSeptetLimitIndex(newMsgBody, pos, limit,
+                            ted.languageTable, ted.languageShiftTable);
+                }
+            } else {  // Assume unicode.
+                nextPos = SmsMessageBase.findNextUnicodePosition(pos, limit, newMsgBody);
+            }
+            if ((nextPos <= pos) || (nextPos > textLen)) {
+                Rlog.e(LOG_TAG, "fragmentText failed (" + pos + " >= " + nextPos + " or " +
+                          nextPos + " >= " + textLen + ")");
+                break;
+            }
+            result.add(newMsgBody.substring(pos, nextPos));
+            pos = nextPos;
+        }
+        return result;
+    }
+
+    /**
+     * create SmsMessage by format
+     * @hide
+     */
+    public static SmsMessage createFromEfRecord(int index, byte[] data, String format) {
+        SmsMessageBase wrappedMessage;
+
+        Rlog.d(LOG_TAG, "createFromEfRecord(): format " + format);
+        if (FORMAT_3GPP2.equals(format)) {
+            wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.createFromEfRecord(
+                    index, data);
+        } else if (FORMAT_3GPP.equals(format)) {
+            wrappedMessage = com.android.internal.telephony.gsm.SmsMessage.createFromEfRecord(
+                    index, data);
+        } else {
+            Rlog.e(LOG_TAG, "createFromEfRecord(): unsupported message format " + format);
+            return null;
+        }
+
+        return wrappedMessage != null ? new SmsMessage(wrappedMessage) : null;
+    }
+
+    /**
+     * Determines whether or not to current phone type is cdma. This function is similar with
+     * isCdmaVoice. Only one difference is this is the non-static function and can use mSubId.
+     *
+     * @return true if current phone type is cdma, false otherwise.
+     */
+    private boolean isCdma() {
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType(mSubId);
+        return (PHONE_TYPE_CDMA == activePhone);
+    }
+
+    /**
+     * Get the current encoding type, ex. 7 bit or UCS2.
+     * App can use the encoding type to check if all Google emoticons content. It has bug while
+     * the emoticons codec cross 2 segments, it will have the broken content and shows to end user.
+     * Therefore, app can check if the encoding type is equal to 16bit. If it is equal to 16 bit,
+     * app is able to merge all content and display as correct emoticons.
+     *
+     * @return ENCODING_UNKNOWN, ENCODING_7BIT, ENCODING_8BIT or ENCODING_16BIT
+     * @hide
+     */
+    public int getEncodingType() {
+        return mWrappedSmsMessage.getEncodingType();
+    }
+    // MTK-END
 }

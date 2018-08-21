@@ -48,23 +48,39 @@ public interface AppInterface {
     // Permission required by STK command receiver
     public static final String STK_PERMISSION = "android.permission.RECEIVE_STK_COMMANDS";
 
-    /*
-     * Intent action broadcasted by StkAppService when the ACTIVATE proactive command
-     * arrives.
-     */
-    public static final String CAT_ACTIVATE_NOTIFY_ACTION =
-                                    "org.codeaurora.intent.action.stk.activate_notify";
-    /*
-     * Intent action broadcasted by NfcService when the HCI Connectivity event occurs.
-     */
-    public static final String CAT_HCI_CONNECTIVITY_ACTION =
-                                    "org.codeaurora.intent.action.stk.hci_connectivity";
-
+    public static final String CLEAR_DISPLAY_TEXT_CMD =
+            "android.intent.action.stk.clear_display_text";
     /*
      * Callback function from app to telephony to pass a result code and user's
      * input back to the ICC.
      */
     void onCmdResponse(CatResponseMessage resMsg);
+
+    /**
+     * Callback function from app to telephony to pass a envelope to the SIM.
+     * @internal
+     */
+    void onEventDownload(CatResponseMessage resMsg);
+
+    /**
+     * Callback function from app to telephony to handle DB.
+     * @internal
+     */
+    void onDBHandler(int sim_id);
+    /**
+     * Function to notify CatService that all calls are disonncected.
+     * @internal
+     */
+    void setAllCallDisConn(boolean isDisConn);
+    /**
+     * Function to check if call disconnected event is received from modem.
+     * @internal
+     */
+    boolean isCallDisConnReceived();
+    /**
+     * Function to launch setup menu from database.
+     */
+    public void onLaunchCachedSetupMenu();
 
     /*
      * Enumeration for representing "Type of Command" of proactive commands.
@@ -89,12 +105,95 @@ public interface AppInterface {
         SET_UP_MENU(0x25),
         SET_UP_CALL(0x10),
         PROVIDE_LOCAL_INFORMATION(0x26),
+
+        /**
+         * Proactive command MORE_TIME
+         */
+        MORE_TIME(0x02),
+        /**
+         * Proactive command POLL_INTERVAL
+         */
+        POLL_INTERVAL(0x03),
+        /**
+         * Proactive command POLLING_OFF
+         */
+        POLLING_OFF(0x04),
+        /**
+         * Proactive command TIMER_MANAGEMENT
+         */
+        TIMER_MANAGEMENT(0x27),
+        /**
+         * Proactive command PERFORM_CARD_APDU
+         */
+        PERFORM_CARD_APDU(0x30),
+        /**
+         * Proactive command POWER_ON_CARD
+         */
+        POWER_ON_CARD(0x31),
+        /**
+         * Proactive command POWER_OFF_CARD
+         */
+        POWER_OFF_CARD(0x32),
+        /**
+         * Proactive command GET_READER_STATUS
+         */
+        GET_READER_STATUS(0x33),
+        /**
+         * Proactive command RUN_AT_COMMAND
+         */
+        RUN_AT_COMMAND(0x34),
+        /**
+         * Proactive command LANGUAGE_NOTIFICATION
+         */
+        LANGUAGE_NOTIFICATION(0x35),
         OPEN_CHANNEL(0x40),
         CLOSE_CHANNEL(0x41),
         RECEIVE_DATA(0x42),
         SEND_DATA(0x43),
+        /**
+         * Proactive command GET_CHANNEL_STATUS
+         */
         GET_CHANNEL_STATUS(0x44),
-        ACTIVATE(0x70);
+        /**
+         * Proactive command SERVICE_SEARCH
+         */
+        SERVICE_SEARCH(0x45),
+        /**
+         * Proactive command GET_SERVICE_INFORMATION
+         */
+        GET_SERVICE_INFORMATION(0x46),
+        /**
+         * Proactive command DECLARE_SERVICE
+         */
+        DECLARE_SERVICE(0x47),
+        /**
+         * Proactive command SET_FRAME
+         */
+        SET_FRAME(0x50),
+        /**
+         * Proactive command GET_FRAME_STATUS
+         */
+        GET_FRAME_STATUS(0x51),
+        /**
+         * Proactive command RETRIEVE_MULTIMEDIA_MESSAGE
+         */
+        RETRIEVE_MULTIMEDIA_MESSAGE(0x60),
+        /**
+         * Proactive command SUBMIT_MULTIMEDIA_MESSAGE
+         */
+        SUBMIT_MULTIMEDIA_MESSAGE(0x61),
+        /**
+         * Proactive command DISPLAY_MULTIMEDIA_MESSAGE
+         */
+        DISPLAY_MULTIMEDIA_MESSAGE(0x62),
+        /**
+         * Proactive command ACTIVATE
+         */
+        ACTIVATE(0x70),
+        /**
+         * Proprietay message for Call Control alpha id display
+         */
+        CALLCTRL_RSP_MSG(0XFF);
 
         private int mValue;
 

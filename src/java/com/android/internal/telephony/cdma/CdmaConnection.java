@@ -22,17 +22,21 @@ import android.os.AsyncResult;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
-import android.os.PersistableBundle;
 import android.os.PowerManager;
 import android.os.Registrant;
 import android.os.SystemClock;
+/// M: For CDMA call accepted @{
+import android.os.Vibrator;
+/// @}
 import android.telephony.DisconnectCause;
 import android.telephony.Rlog;
 import android.text.TextUtils;
 
-import android.telephony.CarrierConfigManager;
 import android.telephony.PhoneNumberUtils;
 import android.telephony.ServiceState;
+/// M: For CDMA call accepted @{
+import android.telephony.TelephonyManager;
+/// @}
 
 import com.android.internal.telephony.uicc.UiccCardApplication;
 import com.android.internal.telephony.uicc.UiccController;
@@ -50,8 +54,8 @@ public class CdmaConnection extends Connection {
     CdmaCallTracker mOwner;
     CdmaCall mParent;
 
-
-    String mPostDialString;      // outgoing calls only
+    /// M: ALPS02614972, move to Connection.java.
+    //String mPostDialString;      // outgoing calls only
     boolean mDisconnected;
     int mIndex;          // index in CdmaCallTracker.connections[], -1 if unassigned
 
@@ -72,15 +76,17 @@ public class CdmaConnection extends Connection {
 
     private PowerManager.WakeLock mPartialWakeLock;
 
-    // The cached delay to be used between DTMF tones fetched from carrier config.
-    private int mDtmfToneDelay = 0;
+    /// M: For CDMA call accepted @{
+    private static final int MO_CALL_VIBRATE_TIME = 200;  // msec
+    private boolean mIsRealConnected; // indicate if the MO call has been accepted by remote side
+    private boolean mReceivedAccepted;
+    /// @}
 
     //***** Event Constants
     static final int EVENT_DTMF_DONE = 1;
     static final int EVENT_PAUSE_DONE = 2;
     static final int EVENT_NEXT_POST_DIAL = 3;
     static final int EVENT_WAKE_LOCK_TIMEOUT = 4;
-    static final int EVENT_DTMF_DELAY_DONE = 5;
 
     //***** Constants
     static final int WAKE_LOCK_TIMEOUT_MILLIS = 60*1000;
@@ -97,20 +103,13 @@ public class CdmaConnection extends Connection {
 
             switch (msg.what) {
                 case EVENT_NEXT_POST_DIAL:
-                case EVENT_DTMF_DELAY_DONE:
+                case EVENT_DTMF_DONE:
                 case EVENT_PAUSE_DONE:
                     processNextPostDialChar();
                     break;
                 case EVENT_WAKE_LOCK_TIMEOUT:
                     releaseWakeLock();
                     break;
-                case EVENT_DTMF_DONE:
-                    // We may need to add a delay specified by carrier between DTMF tones that are
-                    // sent out.
-                    mHandler.sendMessageDelayed(mHandler.obtainMessage(EVENT_DTMF_DELAY_DONE),
-                            mDtmfToneDelay);
-                    break;
-
             }
         }
     }
@@ -119,8 +118,8 @@ public class CdmaConnection extends Connection {
 
     /** This is probably an MT call that we first saw in a CLCC response */
     /*package*/
-    CdmaConnection (CDMAPhone phone, DriverCall dc, CdmaCallTracker ct, int index) {
-        createWakeLock(phone.getContext());
+    CdmaConnection (Context context, DriverCall dc, CdmaCallTracker ct, int index) {
+        createWakeLock(context);
         acquireWakeLock();
 
         mOwner = ct;
@@ -138,14 +137,12 @@ public class CdmaConnection extends Connection {
 
         mParent = parentFromDCState (dc.state);
         mParent.attach(this, dc);
-
-        fetchDtmfToneDelay(phone);
     }
 
     /** This is an MO call/three way call, created when dialing */
     /*package*/
-    CdmaConnection(CDMAPhone phone, String dialString, CdmaCallTracker ct, CdmaCall parent) {
-        createWakeLock(phone.getContext());
+    CdmaConnection(Context context, String dialString, CdmaCallTracker ct, CdmaCall parent) {
+        createWakeLock(context);
         acquireWakeLock();
 
         mOwner = ct;
@@ -179,7 +176,10 @@ public class CdmaConnection extends Connection {
             }
         }
 
-        fetchDtmfToneDelay(phone);
+        /// M: For CDMA call accepted @{
+        mIsRealConnected = false;
+        mReceivedAccepted = false;
+        /// @}
     }
 
     /** This is a Call waiting call*/
@@ -203,8 +203,6 @@ public class CdmaConnection extends Connection {
     }
 
     public void dispose() {
-        clearPostDialListeners();
-        releaseAllWakeLocks();
     }
 
     static boolean
@@ -394,10 +392,6 @@ public class CdmaConnection extends Connection {
                 return DisconnectCause.CDMA_NOT_EMERGENCY;
             case CallFailCause.CDMA_ACCESS_BLOCKED:
                 return DisconnectCause.CDMA_ACCESS_BLOCKED;
-            case CallFailCause.EMERGENCY_TEMP_FAILURE:
-                return DisconnectCause.EMERGENCY_TEMP_FAILURE;
-            case CallFailCause.EMERGENCY_PERM_FAILURE:
-                return DisconnectCause.EMERGENCY_PERM_FAILURE;
             case CallFailCause.ERROR_UNSPECIFIED:
             case CallFailCause.NORMAL_CLEARING:
             default:
@@ -407,10 +401,30 @@ public class CdmaConnection extends Connection {
                         .getInstance()
                         .getUiccCardApplication(phone.getPhoneId(), UiccController.APP_FAM_3GPP2);
                 AppState uiccAppState = (app != null) ? app.getState() : AppState.APPSTATE_UNKNOWN;
+                /// M: @{
+                Rlog.d(LOG_TAG, "disconnectCauseFromCode, causeCode:" + causeCode
+                        + ", app:" + app
+                        + ", serviceState:" + serviceState
+                        + ", uiccAppState:" + uiccAppState);
+                /// @}
                 if (serviceState == ServiceState.STATE_POWER_OFF) {
                     return DisconnectCause.POWER_OFF;
                 } else if (serviceState == ServiceState.STATE_OUT_OF_SERVICE
                         || serviceState == ServiceState.STATE_EMERGENCY_ONLY) {
+                    /// M: CC057: Report DisconnectCause.NORMAL for ECC disconnection @{
+                    /*
+                      Some network play in band information when ECC in DIALING state.
+                      If ECC release from network, don't set DisconnectCause to OUT_OF_SERVICE
+                      to avoid UI pop up "Cellular network not available" dialog to confuse user.
+                    */
+                    if (PhoneNumberUtils.isEmergencyNumber(getAddress())) {
+                        if (causeCode == CallFailCause.NORMAL_UNSPECIFIED ||
+                                causeCode == CallFailCause.NORMAL_CLEARING) {
+                            return DisconnectCause.NORMAL;
+                        }
+                        return DisconnectCause.ERROR_UNSPECIFIED;
+                    }
+                    /// @}
                     return DisconnectCause.OUT_OF_SERVICE;
                 } else if (phone.mCdmaSubscriptionSource ==
                         CdmaSubscriptionSourceManager.SUBSCRIPTION_FROM_RUIM
@@ -419,6 +433,18 @@ public class CdmaConnection extends Connection {
                 } else if (causeCode==CallFailCause.NORMAL_CLEARING) {
                     return DisconnectCause.NORMAL;
                 } else {
+                    /// M: CC057: Report DisconnectCause.NORMAL for ECC disconnection @{
+                    /*
+                      Some network play in band information when ECC in DIALING state.
+                      if ECC release from network, don't set DisconnectCause to ERROR_UNSPECIFIED
+                      to avoid Telecom retry dialing.
+                    */
+                    if (PhoneNumberUtils.isEmergencyNumber(getAddress())) {
+                        if (causeCode == CallFailCause.NORMAL_UNSPECIFIED) {
+                            return DisconnectCause.NORMAL;
+                        }
+                    }
+                    /// @}
                     return DisconnectCause.ERROR_UNSPECIFIED;
                 }
         }
@@ -535,6 +561,16 @@ public class CdmaConnection extends Connection {
             onStartedHolding();
         }
 
+        /// M: For CDMA call accepted @{
+        log("state:" + getState() + ", mReceivedAccepted:" + mReceivedAccepted);
+        if (getState() == CdmaCall.State.ACTIVE && mReceivedAccepted) {
+            if (onCdmaCallAccept()) {
+                mOwner.mPhone.notifyCdmaCallAccepted();
+            }
+            mReceivedAccepted = false;
+        }
+        /// @}
+
         return changed;
     }
 
@@ -582,7 +618,20 @@ public class CdmaConnection extends Connection {
 
         if (!mIsIncoming) {
             // outgoing calls only
-            processNextPostDialChar();
+            //processNextPostDialChar();
+            /// M: For CDMA call accepted @{
+            // send DTMF when the CDMA call is really accepted.
+            if (!isInChina() && !mIsRealConnected) {
+                mIsRealConnected = true;
+                processNextPostDialChar();
+                vibrateForAccepted();
+            }
+            log("mParent.mConnections.size():" + mParent.mConnections.size());
+            if (mParent.mConnections.size() > 1) {
+                mIsRealConnected = true;
+                processNextPostDialChar();
+            }
+            /// @}
         } else {
             // Only release wake lock for incoming calls, for outgoing calls the wake lock
             // will be released after any pause-dial is completed
@@ -804,22 +853,14 @@ public class CdmaConnection extends Connection {
     }
 
     private void acquireWakeLock() {
-        log("acquireWakeLock");
+        log("acquireWakeLock, " + hashCode());
         mPartialWakeLock.acquire();
     }
 
     private void releaseWakeLock() {
         synchronized (mPartialWakeLock) {
             if (mPartialWakeLock.isHeld()) {
-                log("releaseWakeLock");
-                mPartialWakeLock.release();
-            }
-        }
-    }
-
-    private void releaseAllWakeLocks() {
-        synchronized (mPartialWakeLock) {
-            while (mPartialWakeLock.isHeld()) {
+                log("releaseWakeLock, " + hashCode());
                 mPartialWakeLock.release();
             }
         }
@@ -954,16 +995,6 @@ public class CdmaConnection extends Connection {
         return "<MASKED>";
     }
 
-    private void fetchDtmfToneDelay(CDMAPhone phone) {
-        CarrierConfigManager configMgr = (CarrierConfigManager)
-                phone.getContext().getSystemService(Context.CARRIER_CONFIG_SERVICE);
-        PersistableBundle b = configMgr.getConfigForSubId(phone.getSubId());
-        if (b != null) {
-            mDtmfToneDelay = b.getInt(CarrierConfigManager.KEY_CDMA_DTMF_TONE_DELAY_INT);
-        }
-    }
-
-
     @Override
     public int getNumberPresentation() {
         return mNumberPresentation;
@@ -993,4 +1024,60 @@ public class CdmaConnection extends Connection {
     public boolean isMultiparty() {
         return false;
     }
+
+    /// M: CC053: MoMS [Mobile Managerment] @{
+    /*package*/ boolean
+    onDisconnectByMom(int cause) {
+        boolean changed = false;
+        mCause = cause;
+        if (!mDisconnected) {
+            doDisconnect();
+            if (VDBG) { Rlog.d(LOG_TAG, "onDisconnectByMom, cause:" + cause); }
+            if (mParent != null) {
+                changed = mParent.connectionDisconnected(this);
+            }
+        }
+        releaseWakeLock();
+        return changed;
+    }
+    /// @}
+
+    /// M: For CDMA call accepted @{
+    public boolean isRealConnected() {
+        return mIsRealConnected;
+    }
+
+    boolean onCdmaCallAccept() {
+        Rlog.d(LOG_TAG, "onCdmaCallAccept, mIsRealConnected:" + mIsRealConnected
+                + ", state:" + getState());
+        if (getState() != CdmaCall.State.ACTIVE) {
+            mReceivedAccepted = true;
+            return false;
+        }
+        mConnectTimeReal = SystemClock.elapsedRealtime();
+        mDuration = 0;
+        mConnectTime = System.currentTimeMillis();
+        if (!mIsRealConnected) {
+            mIsRealConnected = true;
+            // send DTMF when the CDMA call is really accepted.
+            processNextPostDialChar();
+            vibrateForAccepted();
+        }
+        return true;
+    }
+
+    private boolean isInChina() {
+        TelephonyManager tm = TelephonyManager.getDefault();
+        String numeric = tm.getNetworkOperatorForPhone(mOwner.mPhone.getPhoneId());
+        Rlog.d(LOG_TAG, "isInChina, numeric:" + numeric);
+        return numeric.indexOf("460") == 0;
+    }
+
+    private void vibrateForAccepted() {
+        //if CDMA phone accepted, start a Vibrator
+        Vibrator vibrator = (Vibrator) mOwner.mPhone.getContext().getSystemService(
+                Context.VIBRATOR_SERVICE);
+        vibrator.vibrate(MO_CALL_VIBRATE_TIME);
+    }
+    /// @}
 }

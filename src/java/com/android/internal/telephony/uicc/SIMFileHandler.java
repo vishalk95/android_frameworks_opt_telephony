@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +47,9 @@ public final class SIMFileHandler extends IccFileHandler implements IccConstants
         // Implement this after discussion with OEMs.
         switch(efid) {
         case EF_SMS:
+        // MTK-START
+        case EF_SMSP:   // [ALPS01206315] Support EF_SMSP
+        // MTK-END
             return MF_SIM + DF_TELECOM;
 
         case EF_EXT6:
@@ -65,12 +73,18 @@ public final class SIMFileHandler extends IccFileHandler implements IccConstants
         case EF_SPN_SHORT_CPHS:
         case EF_INFO_CPHS:
         case EF_CSP_CPHS:
-        case EF_PLMNWACT:
-        case EF_HPLMNWACT:
-        /* Support for reading user & operator PLMN list from SIM
-        (3GPP spec TS 11.11; File EFPLMNsel is read from SIM*/
-         case EF_PLMN_SEL:
             return MF_SIM + DF_GSM;
+        // MTK-START
+        case EF_ECC:
+        case EF_OPL:
+        // MTK-END
+            return MF_SIM + DF_GSM;
+        // MTK-START
+        case EF_RAT: // ALPS00302702 RAT balancing (ADF(USIM)/7F66/5F30/EF_RAT)
+            return DF_USIM + "7F66" + "5F30";
+        case EF_CSIM_IMSIM:
+            return MF_SIM + DF_CDMA;
+        // MTK-END
         }
         String path = getCommonIccEFPath(efid);
         if (path == null) {

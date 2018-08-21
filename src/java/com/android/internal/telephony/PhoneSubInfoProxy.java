@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,9 @@ import java.io.PrintWriter;
 
 import android.os.RemoteException;
 import android.os.ServiceManager;
+// MTK-START
+import android.os.Message;
+// MTK-END
 
 
 public class PhoneSubInfoProxy extends IPhoneSubInfo.Stub {
@@ -275,6 +283,260 @@ public class PhoneSubInfoProxy extends IPhoneSubInfo.Stub {
     public String getIccSimChallengeResponse(int subId, int appType, String data) {
         return mPhoneSubInfo.getIccSimChallengeResponse(subId, appType, data);
     }
+
+    // MTK-START
+
+    /**
+     * Returns the IMS private user identity (IMPI) that was loaded from the ISIM for
+     * particular subId.
+     * @param subId subscription ID to be queried
+     * @return the IMPI, or null if not present or not loaded
+     */
+    @Override
+    public String getIsimImpiForSubscriber(int subId) throws RemoteException {
+        return null;
+    }
+
+    /**
+     * Returns the IMS home network domain name that was loaded from the ISIM for particular subId.
+     * @param subId subscription ID to be queried
+     * @return the IMS domain name, or null if not present or not loaded
+     */
+    @Override
+    public String getIsimDomainForSubscriber(int subId) throws RemoteException {
+        return null;
+    }
+
+    /**
+     * Returns the IMS public user identities (IMPU) that were loaded from the
+     * ISIM for particular subId.
+     * @param subId subscription ID to be queried
+     * @return an array of IMPU strings, with one IMPU per string, or null if
+     *      not present or not loaded
+     */
+    @Override
+    public String[] getIsimImpuForSubscriber(int subId) throws RemoteException {
+        return null;
+    }
+
+    /**
+     * Returns the IMS Service Table (IST) that was loaded from the ISIM for particular subId.
+     * @param subId subscription ID to be queried
+     * @return IMS Service Table or null if not present or not loaded
+     */
+    @Override
+    public String getIsimIstForSubscriber(int subId) throws RemoteException {
+        return null;
+    }
+
+    /**
+     * Returns the IMS Proxy Call Session Control Function(PCSCF) that were loaded from
+     * the ISIM for particular subId.
+     * @param subId subscription ID to be queried
+     * @return an array of PCSCF strings with one PCSCF per string, or null if
+     *      not present or not loaded
+     */
+    @Override
+    public String[] getIsimPcscfForSubscriber(int subId) throws RemoteException {
+        return null;
+    }
+
+    /**
+     * Returns the GBA bootstrapping parameters (GBABP) that was loaded from the ISIM.
+     * @return GBA bootstrapping parameters or null if not present or not loaded
+     */
+    @Override
+    public String getIsimGbabp() {
+        return mPhoneSubInfo.getIsimGbabp();
+    }
+
+    /**
+     * Returns the GBA bootstrapping parameters (GBABP) that was loaded from the ISIM for
+     * particular subId.
+     * @param subId subscription ID to be queried
+     * @return GBA bootstrapping parameters or null if not present or not loaded
+     */
+    @Override
+    public String getIsimGbabpForSubscriber(int subId) throws RemoteException {
+        return null;
+    }
+
+    /**
+     * Set the GBA bootstrapping parameters (GBABP) value into the ISIM.
+     * @param gbabp a GBA bootstrapping parameters value in String type
+     * @param onComplete
+     *        onComplete.obj will be an AsyncResult
+     *        ((AsyncResult)onComplete.obj).exception == null on success
+     *        ((AsyncResult)onComplete.obj).exception != null on fail
+     */
+    @Override
+    public void setIsimGbabp(String gbabp, Message onComplete) {
+        mPhoneSubInfo.setIsimGbabp(gbabp, onComplete);
+    }
+
+    /**
+     * Set the GBA bootstrapping parameters (GBABP) value into the ISIM for particular subId.
+     * @param subId subscription ID to be queried
+     * @param gbabp a GBA bootstrapping parameters value in String type
+     * @param onComplete
+     *        onComplete.obj will be an AsyncResult
+     *        ((AsyncResult)onComplete.obj).exception == null on success
+     *        ((AsyncResult)onComplete.obj).exception != null on fail
+     */
+    @Override
+    public void setIsimGbabpForSubscriber(
+            int subId, String gbabp, Message onComplete) throws RemoteException {
+        return;
+    }
+
+    /**
+     * Returns the USIM Service Table (UST) that was loaded from the USIM.
+     * @param service service index on UST
+     * @return the indicated service is supported or not
+     */
+    @Override
+    public boolean getUsimService(int service) {
+        return mPhoneSubInfo.getUsimService(service);
+    }
+
+    /**
+     * Returns the USIM Service Table (UST) that was loaded from the USIM for particular subId.
+     * @param subId subscription ID to be queried
+     * @param service service index on UST
+     * @return  the indicated service is supported or not
+     */
+    @Override
+    public boolean getUsimServiceForSubscriber(int subId, int service) throws RemoteException {
+        return false;
+    }
+
+    /**
+     * Returns the GBA bootstrapping parameters (GBABP) that was loaded from the USIM.
+     * @return GBA bootstrapping parameters or null if not present or not loaded
+     */
+    @Override
+    public String getUsimGbabp() {
+        return mPhoneSubInfo.getUsimGbabp();
+    }
+
+    /**
+     * Returns the GBA bootstrapping parameters (GBABP) that was loaded from the USIM for
+     * particular subId.
+     * @param subId subscription ID to be queried
+     * @return GBA bootstrapping parameters or null if not present or not loaded
+     */
+    @Override
+    public String getUsimGbabpForSubscriber(int subId) throws RemoteException {
+        return null;
+    }
+
+    /**
+     * Set the GBA bootstrapping parameters (GBABP) value into the USIM.
+     * @param gbabp a GBA bootstrapping parameters value in String type
+     * @param onComplete
+     *        onComplete.obj will be an AsyncResult
+     *        ((AsyncResult)onComplete.obj).exception == null on success
+     *        ((AsyncResult)onComplete.obj).exception != null on fail
+     */
+    @Override
+    public void setUsimGbabp(String gbabp, Message onComplete) {
+        mPhoneSubInfo.setUsimGbabp(gbabp, onComplete);
+    }
+
+    /**
+     * Set the GBA bootstrapping parameters (GBABP) value into the USIM for particular subId.
+     * @param subId subscription ID to be queried
+     * @param gbabp a GBA bootstrapping parameters value in String type
+     * @param onComplete
+     *        onComplete.obj will be an AsyncResult
+     *        ((AsyncResult)onComplete.obj).exception == null on success
+     *        ((AsyncResult)onComplete.obj).exception != null on fail
+     */
+    @Override
+    public void setUsimGbabpForSubscriber(
+            int subId, String gbabp, Message onComplete) throws RemoteException {
+        return;
+    }
+
+    /**
+     * Returns the Public Service Identity of the SM-SC (PSISMSC) that was loaded from the USIM.
+     * @return PSISMSC or null if not present or not loaded
+     */
+    @Override
+    public byte[] getIsimPsismsc() {
+        return mPhoneSubInfo.getIsimPsismsc();
+    }
+
+    /**
+     * Returns the Public Service Identity of the SM-SC (PSISMSC) that was loaded from the
+     * ISIM for particular subId.
+     * @param subId subscription ID to be queried
+     * @return PSISMSC or null if not present or not loaded
+     */
+    @Override
+    public byte[] getIsimPsismscForSubscriber(int subId) throws RemoteException {
+        return null;
+    }
+
+    /**
+     * Returns the Public Service Identity of the SM-SC (PSISMSC) that was loaded from the USIM.
+     * @return PSISMSC or null if not present or not loaded
+     */
+    @Override
+    public byte[] getUsimPsismsc() {
+        return mPhoneSubInfo.getUsimPsismsc();
+    }
+
+    /**
+     * Returns the Public Service Identity of the SM-SC (PSISMSC) that was loaded from the USIM
+     * for particular subId.
+     * @param subId subscription ID to be queried
+     * @return PSISMSC or null if not present or not loaded
+     */
+    @Override
+    public byte[] getUsimPsismscForSubscriber(int subId) throws RemoteException {
+        return null;
+    }
+
+    /**
+     * Returns the Short message parameter (SMSP) that was loaded from the USIM.
+     * @return PSISMSC or null if not present or not loaded
+     */
+    @Override
+    public byte[] getUsimSmsp() {
+        return mPhoneSubInfo.getUsimSmsp();
+    }
+
+    /**
+     * Returns the Short message parameter (SMSP) that was loaded from the USIM for particular subId.
+     * @param subId subscription ID to be queried
+     * @return SMSP or null if not present or not loaded
+     */
+    @Override
+    public byte[] getUsimSmspForSubscriber(int subId) throws RemoteException {
+        return null;
+    }
+
+    /**
+     * Returns the MCC+MNC length that was loaded from the USIM.
+     * @return MCC+MNC length or 0 if not present or not loaded
+     */
+    @Override
+    public int getMncLength() {
+        return mPhoneSubInfo.getMncLength();
+    }
+
+    /**
+     * Returns the MCC+MNC length that was loaded from the USIM for particular subId.
+     * @param subId subscription ID to be queried
+     * @return MCC+MNC length or 0 if not present or not loaded
+     */
+    @Override
+    public int getMncLengthForSubscriber(int subId) throws RemoteException {
+        return 0;
+    }
+
+    // MTK-END
 
     @Override
     protected void dump(FileDescriptor fd, PrintWriter pw, String[] args) {

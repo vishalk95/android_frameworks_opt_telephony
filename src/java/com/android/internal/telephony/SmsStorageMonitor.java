@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2011 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,6 +52,11 @@ public final class SmsStorageMonitor extends Handler {
     /** Radio is ON */
     private static final int EVENT_RADIO_ON = 3;
 
+    // MTK-START
+    /** ME storage is full and receiving a new SMS from network */
+    private static final int EVENT_ME_FULL = 100;
+    // MTK-END
+
     /** Context from phone object passed to constructor. */
     private final Context mContext;
 
@@ -79,6 +89,9 @@ public final class SmsStorageMonitor extends Handler {
         createWakelock();
 
         mCi.setOnIccSmsFull(this, EVENT_ICC_FULL, null);
+        // MTK-START
+        mCi.setOnMeSmsFull(this, EVENT_ME_FULL, null);
+        // MTK-END
         mCi.registerForOn(this, EVENT_RADIO_ON, null);
 
         // Register for device storage intents.  Use these to notify the RIL
@@ -120,13 +133,29 @@ public final class SmsStorageMonitor extends Handler {
                 break;
 
             case EVENT_RADIO_ON:
-                if (mReportMemoryStatusPending) {
+                // MTK-START
+                /***********************************************************
+                 * There are 2 possible  scenarios will turn off modem
+                 * 1) MTK_FLIGHT_MODE_POWER_OFF_MD, AP turns off modem while flight mode
+                 * 2) MTK_RADIOOFF_POWER_OFF_MD, AP turns off modem while radio off
+                 * In next time modem power on, it will missing stroage full notification,
+                 * we need to re-send this notification while radio on
+                 **********************************************************/
+                // if (mReportMemoryStatusPending) {
+                {
+                // MTK-END
                     Rlog.v(TAG, "Sending pending memory status report : mStorageAvailable = "
                             + mStorageAvailable);
                     mCi.reportSmsMemoryStatus(mStorageAvailable,
                             obtainMessage(EVENT_REPORT_MEMORY_STATUS_DONE));
                 }
                 break;
+
+            // MTK-START
+            case EVENT_ME_FULL:
+                handleMeFull();
+                break;
+            // MTK-END
         }
     }
 
@@ -140,7 +169,9 @@ public final class SmsStorageMonitor extends Handler {
      * Called when SIM_FULL message is received from the RIL.  Notifies interested
      * parties that SIM storage for SMS messages is full.
      */
-    private void handleIccFull() {
+    // MTK-START
+    public void handleIccFull() {
+    // MTK-END
         // broadcast SIM_FULL intent
         Intent intent = new Intent(Intents.SIM_FULL_ACTION);
         mWakeLock.acquire(WAKE_LOCK_TIMEOUT);
@@ -165,4 +196,19 @@ public final class SmsStorageMonitor extends Handler {
             }
         }
     };
+
+    // MTK-START
+    /**
+     * Called when ME_FULL message is received from the RIL.  Notifies interested
+     * parties that ME storage for SMS messages is full.
+     */
+    private void handleMeFull() {
+        // broadcast SMS_REJECTED_ACTION intent
+        Intent intent = new Intent(Intents.SMS_REJECTED_ACTION);
+        intent.putExtra("result", Intents.RESULT_SMS_OUT_OF_MEMORY);
+        SubscriptionManager.putPhoneIdAndSubIdExtra(intent, mPhone.getPhoneId());
+        mWakeLock.acquire(WAKE_LOCK_TIMEOUT);
+        mContext.sendBroadcast(intent, android.Manifest.permission.RECEIVE_SMS);
+    }
+    // MTK-END
 }

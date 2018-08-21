@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2011 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -128,6 +133,12 @@ public final class UsimServiceTable extends IccServiceTable {
     public boolean isAvailable(UsimService service) {
         return super.isAvailable(service.ordinal());
     }
+
+    // MTK-START
+    public boolean isAvailable(int service) {
+        return super.isAvailable(service);
+    }
+    // MTK-END
 
     @Override
     protected String getTag() {

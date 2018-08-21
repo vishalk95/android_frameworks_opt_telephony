@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,10 @@ import com.android.internal.telephony.Connection;
 import com.android.internal.telephony.DriverCall;
 import com.android.internal.telephony.Phone;
 
+/// M: For 3G VT only @{
+import com.mediatek.internal.telephony.gsm.GsmVTProvider;
+/// @}
+
 import java.util.List;
 
 /**
@@ -31,6 +40,10 @@ class GsmCall extends Call {
     /*************************** Instance Variables **************************/
 
     /*package*/ GsmCallTracker mOwner;
+
+    /// M: For 3G VT only @{
+    GsmVTProvider mVTProvider = null;
+    /// @}
 
     /****************************** Constructors *****************************/
     /*package*/
@@ -59,7 +72,34 @@ class GsmCall extends Call {
     @Override
     public boolean
     isMultiparty() {
-        return mConnections.size() > 1;
+        /// M: CC014: Remove DISCONNECTED & DIALING conn from counting isMultiparty @{
+        int DiscConn = 0;
+        boolean isMptyCall = false;
+
+        for (int j = mConnections.size() - 1 ; j >= 0 ; j--) {
+            GsmConnection cn = (GsmConnection) (mConnections.get(j));
+
+            if (cn.getState() == GsmCall.State.DISCONNECTED) {
+                DiscConn++;
+            }
+        }
+
+        if (mConnections.size() <= 1) {
+            isMptyCall = false;
+        } else if (mConnections.size() > 1) {
+            if ((mConnections.size() - DiscConn) <= 1) {
+                isMptyCall = false;
+            } else if (getState() == GsmCall.State.DIALING) {
+                isMptyCall = false;
+            } else {
+                isMptyCall = true;
+            }
+        } else {
+            isMptyCall = false;
+        }
+
+        return isMptyCall;
+        /// @}
     }
 
     /** Please note: if this is the foreground call and a
@@ -172,7 +212,13 @@ class GsmCall extends Call {
 
             cn.onHangupLocal();
         }
-        mState = State.DISCONNECTING;
+
+        /// M: CC090: Only set state to DISCONNECTING if the call is still alive @{
+        //[ALPS01599687]
+        if ((mConnections.size() != 0) && getState().isAlive()) {
+           mState = State.DISCONNECTING;
+        }
+        /// @}
     }
 
     /**

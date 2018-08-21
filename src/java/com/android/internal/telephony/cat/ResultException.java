@@ -60,7 +60,10 @@ public class ResultException extends CatException {
     }
 
     public ResultException(ResultCode result, int additionalInfo) {
-        this(result);
+
+        super();
+        mResult = result;
+        mExplanation = "";
 
         if (additionalInfo < 0) {
             throw new AssertionError(

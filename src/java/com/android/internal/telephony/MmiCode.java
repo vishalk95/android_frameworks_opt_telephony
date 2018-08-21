@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -64,4 +69,10 @@ public interface MmiCode
      * @return true if an outstanding request can be canceled.
      */
     public boolean isCancelable();
+
+    //For ALPS01471897
+    /**
+     * @return true if it is user initiated
+     */
+    public boolean getUserInitiatedMMI();
 }

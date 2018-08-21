@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +44,11 @@ import java.util.Map;
 import libcore.icu.ICU;
 import libcore.icu.TimeZoneNames;
 
+// MTK-START
+import com.mediatek.common.telephony.ITelephonyExt;
+import com.mediatek.common.MPlugin;
+// MTK-END
+
 /**
  * Mobile Country Code
  *
@@ -53,14 +63,26 @@ public final class MccTable {
         final int mMcc;
         final String mIso;
         final int mSmallestDigitsMnc;
+        // MTK-START
+        String mLanguage;
+        // MTK-END
 
         MccEntry(int mnc, String iso, int smallestDigitsMCC) {
+        // MTK-START
+            this(mnc, iso, smallestDigitsMCC, null);
+        }
+
+        MccEntry(int mnc, String iso, int smallestDigitsMCC, String language) {
+        // MTK-END
             if (iso == null) {
                 throw new NullPointerException();
             }
             mMcc = mnc;
             mIso = iso;
             mSmallestDigitsMnc = smallestDigitsMCC;
+            // MTK-START
+            mLanguage = language;
+            // MTK-END
         }
 
         @Override
@@ -529,7 +551,9 @@ public final class MccTable {
 		sTable.add(new MccEntry(457,"la",2));	//Lao People's Democratic Republic
 		sTable.add(new MccEntry(460,"cn",2));	//China (People's Republic of)
 		sTable.add(new MccEntry(461,"cn",2));	//China (People's Republic of)
-		sTable.add(new MccEntry(466,"tw",2));	//"Taiwan, China"
+                // MTK-START
+                sTable.add(new MccEntry(466, "tw", 2, "zh"));  //"Taiwan"
+                // MTK-END
 		sTable.add(new MccEntry(467,"kp",2));	//Democratic People's Republic of Korea
 		sTable.add(new MccEntry(470,"bd",2));	//Bangladesh (People's Republic of)
 		sTable.add(new MccEntry(472,"mv",2));	//Maldives (Republic of)

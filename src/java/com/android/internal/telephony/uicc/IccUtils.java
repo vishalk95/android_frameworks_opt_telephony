@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,11 +27,12 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.telephony.Rlog;
 
-
-import com.android.internal.telephony.EncodeException;
 import com.android.internal.telephony.GsmAlphabet;
 import java.io.UnsupportedEncodingException;
-import java.nio.charset.Charset;
+
+// MTK-START
+import android.os.SystemProperties;
+// MTK-END
 
 /**
  * Various methods, useful for dealing with SIM data.
@@ -180,6 +186,37 @@ public class IccUtils {
         if (length == 0) {
             return "";
         }
+
+        // MTK-START
+        // ALPS01977595 - KOR MVNO Operator Support (For AOSP)
+        if (SystemProperties.get("ro.mtk_kor_customization").equals("1")) {
+            if (isKSC5601(data)) {
+                Rlog.d(LOG_TAG, "KSC5601 Data!");
+
+                int    ucslen = 0;
+                String ret    = "";
+
+                try {
+                    ret = new String(data , "KSC5601");
+                } catch (UnsupportedEncodingException ex) {
+                    Rlog.e(LOG_TAG, "Implausible UnsupportedEncodingException", ex);
+                }
+
+                if (ret != null) {
+                    ucslen = ret.length();
+                    while (ucslen > 0 && ret.charAt(ucslen - 1) == '\uF8F7')
+                        ucslen--;
+
+                    Rlog.d(LOG_TAG, "Decode EMAIL using KSC5601 : " + ret.substring(0, ucslen));
+
+                    return ret.substring(0, ucslen);
+                }
+            }
+            else
+                Rlog.d(LOG_TAG, "No KSC5601 Data!");
+        }
+        // MTK-END
+
         if (length >= 1) {
             if (data[offset] == (byte) 0x80) {
                 int ucslen = (length - 1) / 2;
@@ -265,6 +302,40 @@ public class IccUtils {
         }
         return GsmAlphabet.gsm8BitUnpackedToString(data, offset, length, defaultCharset.trim());
     }
+
+    // MTK-START
+    /**
+     * Check encoding is KSC5601 or not
+     *
+     * @param    data      bytes an array of bytes
+     * @return   boolean   KSC5601 -> true, or false return.
+     *
+     */
+    public static boolean isKSC5601(byte[] data) {
+        char[] c = byteToCharArray(data);
+
+        for (int i = 0; i < c.length; i++) {
+            if (((c[i] & 0xFFFF) >= 0xAC00) && ((c[i] & 0xFFFF) <= 0xD7A3))
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * Converts a byte array to char array.
+     *
+     * @param  data   bytes an array of bytes
+     * @return char[] bytes an array of chars
+     *
+     */
+    public static char[] byteToCharArray(byte [] data) {
+        char[] chars = new char[data.length / 2];
+
+        for (int i = 0; i < chars.length; i++)
+            chars[i] = (char) (((data[(i * 2)] & 0xff) << 8) + (data[(i * 2 + 1)] & 0xff));
+        return chars;
+    }
+    // MTK-END
 
     static int
     hexCharToInt(char c) {
@@ -529,29 +600,148 @@ public class IccUtils {
         return result;
     }
 
-    static byte[]
-    stringToAdnStringField(String alphaTag) {
-        boolean isUcs2 = false;
-        try {
-           for(int i = 0; i < alphaTag.length(); i++) {
-               GsmAlphabet.countGsmSeptets(alphaTag.charAt(i), true);
-           }
-        } catch (EncodeException e) {
-            isUcs2 = true;
+    // MTK-START
+    /**
+     * Many fields in GSM SIM's are stored as nibble-swizzled BCD
+     *
+     * Assumes 0xf as normal value .
+     *
+     *  returning string
+     */
+    public static String
+    parseIccIdToString(byte[] data, int offset, int length) {
+        StringBuilder ret = new StringBuilder(length * 2);
+
+        for (int i = offset ; i < offset + length ; i++) {
+            byte b;
+            int v;
+
+            v = data[i] & 0xf;
+            if (0 <= v && v <= 9) {
+                ret.append((char) ('0' + v));
+            } else {
+                ret.append((char) ('a' + v - 0xa));
+            }
+
+            v = (data[i] >> 4) & 0xf;
+            if (0 <= v && v <= 9) {
+                ret.append((char) ('0' + v));
+            } else {
+                ret.append((char) ('a' + v - 0xa));
+            }
         }
-        return stringToAdnStringField(alphaTag, isUcs2);
+
+        return ret.toString();
     }
 
-    static byte[]
-    stringToAdnStringField(String alphaTag, boolean isUcs2) {
-        if (!isUcs2) {
-            return GsmAlphabet.stringToGsm8BitPacked(alphaTag);
-        }
-        byte[] alphaTagBytes = alphaTag.getBytes(Charset.forName("UTF-16BE"));
-        byte[] ret = new byte[1 + alphaTagBytes.length];
-        ret[0] = (byte)0x80;
-        System.arraycopy(alphaTagBytes, 0, ret, 1, alphaTagBytes.length);
+    public static String
+       parsePlmnToStringForEfOpl(byte[] data, int offset, int length) {
 
-        return ret;
+        StringBuilder ret = new StringBuilder(length * 2);
+        int v;
+
+        do {
+            v = data[offset] & 0xf;
+            if (v >= 0 && v <= 9)
+                ret.append((char) ('0' + v));
+            else if (v == 13) // wild-carding
+                ret.append((char) ('d'));
+            else
+                break;
+
+            v = (data[offset] >> 4) & 0xf;
+            if (v >= 0 && v <= 9)
+                ret.append((char) ('0' + v));
+            else if (v == 13) // wild-carding
+                ret.append((char) ('d'));
+            else
+                break;
+
+            v = data[offset + 1] & 0xf;
+            if (v >= 0 && v <= 9)
+                ret.append((char) ('0' + v));
+            else if (v == 13) // wild-carding
+                ret.append((char) ('d'));
+            else
+                break;
+
+            v = data[offset + 2] & 0xf;
+            if (v >= 0 && v <= 9)
+                ret.append((char) ('0' + v));
+            else if (v == 13) // wild-carding
+                ret.append((char) ('d'));
+            else
+                break;
+
+            v = (data[offset + 2] >> 4) & 0xf;
+            if (v >= 0 && v <= 9)
+                ret.append((char) ('0' + v));
+            else if (v == 13) // wild-carding
+                ret.append((char) ('d'));
+            else
+                break;
+
+            v = (data[offset + 1] >> 4) & 0xf;
+            if (v >= 0 && v <= 9)
+                ret.append((char) ('0' + v));
+            else if (v == 13) // wild-carding
+                ret.append((char) ('d'));
+            else
+                break;
+        }   while(false);
+
+        return ret.toString();
     }
+
+    public static String parseLanguageIndicator(byte[] rawData, int offset, int length) {
+        if (null == rawData) {
+            return null;
+        }
+
+        if (rawData.length < offset + length) {
+            Rlog.e(LOG_TAG, "length is invalid");
+            return null;
+        }
+
+        return GsmAlphabet.gsm8BitUnpackedToString(rawData, offset, length);
+    }
+
+    /*
+      * parse plmn according to spec 24008
+    */
+    public static String
+       parsePlmnToString(byte[] data, int offset, int length) {
+
+        StringBuilder ret = new StringBuilder(length * 2);
+        int v;
+
+        do {
+            v = data[offset] & 0xf;
+            if (v > 9)  break;
+                ret.append((char) ('0' + v));
+
+            v = (data[offset] >> 4) & 0xf;
+            if (v > 9)  break;
+                ret.append((char) ('0' + v));
+
+            v = data[offset + 1] & 0xf;
+            if (v > 9)  break;
+                ret.append((char) ('0' + v));
+
+            v = data[offset + 2] & 0xf;
+            if (v > 9)  break;
+                ret.append((char) ('0' + v));
+
+            v = (data[offset + 2] >> 4) & 0xf;
+            if (v > 9)  break;
+                ret.append((char) ('0' + v));
+
+            v = (data[offset + 1] >> 4) & 0xf;
+            if (v > 9)  break;
+                ret.append((char) ('0' + v));
+        }   while(false);
+
+        return ret.toString();
+    }
+    // MTK-END
 }

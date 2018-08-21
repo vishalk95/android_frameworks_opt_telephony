@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2008 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -257,6 +262,37 @@ public final class BearerData {
             ts.second = second;
             return ts;
         }
+
+        // MTK_START: use to convert the local time to utc for sc time.
+        public TimeStamp(String timeZone) {
+            super(timeZone);
+        }
+
+        public static TimeStamp fromByteArray(byte[] data, String timeZone) {
+            TimeStamp ts = new TimeStamp(timeZone);
+
+            // C.S0015-B v2.0, 4.5.4: range is 1996-2095
+            int year = IccUtils.cdmaBcdByteToInt(data[0]);
+            if (year > 99 || year < 0) return null;
+            ts.year = year >= 96 ? year + 1900 : year + 2000;
+            int month = IccUtils.cdmaBcdByteToInt(data[1]);
+            if (month < 1 || month > 12) return null;
+            ts.month = month - 1;
+            int day = IccUtils.cdmaBcdByteToInt(data[2]);
+            if (day < 1 || day > 31) return null;
+            ts.monthDay = day;
+            int hour = IccUtils.cdmaBcdByteToInt(data[3]);
+            if (hour < 0 || hour > 23) return null;
+            ts.hour = hour;
+            int minute = IccUtils.cdmaBcdByteToInt(data[4]);
+            if (minute < 0 || minute > 59) return null;
+            ts.minute = minute;
+            int second = IccUtils.cdmaBcdByteToInt(data[5]);
+            if (second < 0 || second > 59) return null;
+            ts.second = second;
+            return ts;
+        }
+        // MTK_END
 
         @Override
         public String toString() {
@@ -596,45 +632,6 @@ public final class BearerData {
         System.arraycopy(payload, 0, uData.payload, udhBytes, payload.length);
     }
 
-    private static void encode7bitAsciiEms(UserData uData, byte[] udhData, boolean force)
-            throws CodingException
-    {
-        try {
-            Rlog.d(LOG_TAG, "encode7bitAsciiEms");
-            int udhBytes = udhData.length + 1;  // Add length octet.
-            int udhSeptets = ((udhBytes * 8) + 6) / 7;
-            int paddingBits = (udhSeptets * 7) - (udhBytes * 8);
-            String msg = uData.payloadStr;
-            byte[] payload ;
-            int msgLen = msg.length();
-            BitwiseOutputStream outStream = new BitwiseOutputStream(msgLen +
-                    (paddingBits > 0 ? 1 : 0));
-            outStream.write(paddingBits, 0);
-            for (int i = 0; i < msgLen; i++) {
-                int charCode = UserData.charToAscii.get(msg.charAt(i), -1);
-                if (charCode == -1) {
-                    if (force) {
-                        outStream.write(7, UserData.UNENCODABLE_7_BIT_CHAR);
-                    } else {
-                        throw new CodingException("cannot ASCII encode (" + msg.charAt(i) + ")");
-                    }
-                } else {
-                    outStream.write(7, charCode);
-                }
-            }
-            payload = outStream.toByteArray();
-            uData.msgEncoding = UserData.ENCODING_7BIT_ASCII;
-            uData.msgEncodingSet = true;
-            uData.numFields = udhSeptets + uData.payloadStr.length();
-            uData.payload = new byte[udhBytes + payload.length];
-            uData.payload[0] = (byte)udhData.length;
-            System.arraycopy(udhData, 0, uData.payload, 1, udhData.length);
-            System.arraycopy(payload, 0, uData.payload, udhBytes, payload.length);
-        } catch (BitwiseOutputStream.AccessException ex) {
-            throw new CodingException("7bit ASCII encode failed: " + ex);
-        }
-    }
-
     private static void encodeEmsUserDataPayload(UserData uData)
         throws CodingException
     {
@@ -642,10 +639,15 @@ public final class BearerData {
         if (uData.msgEncodingSet) {
             if (uData.msgEncoding == UserData.ENCODING_GSM_7BIT_ALPHABET) {
                 encode7bitEms(uData, headerData, true);
-            } else if (uData.msgEncoding == UserData.ENCODING_UNICODE_16) {
-                encode16bitEms(uData, headerData);
+            // MTK-START
+            // Support 7BIT_ASCII encoding type when has user data header.
             } else if (uData.msgEncoding == UserData.ENCODING_7BIT_ASCII) {
                 encode7bitAsciiEms(uData, headerData, true);
+            } else if (uData.msgEncoding == UserData.ENCODING_OCTET) {
+                encodeOctetEms(uData, headerData);
+            // MTK-END
+            } else if (uData.msgEncoding == UserData.ENCODING_UNICODE_16) {
+                encode16bitEms(uData, headerData);
             } else {
                 throw new CodingException("unsupported EMS user data encoding (" +
                                           uData.msgEncoding + ")");
@@ -982,6 +984,14 @@ public final class BearerData {
                 outStream.write(8, SUBPARAM_SERVICE_CATEGORY_PROGRAM_RESULTS);
                 encodeScpResults(bData, outStream);
             }
+            // MTK-START: AOSP's MT message PDU can't be wrote to RUIM directly,
+            // in order to encode the smsc time to the PDU, we check the time and
+            // handle it at here.
+            if (bData.msgCenterTimeStamp != null) {
+                outStream.write(8, SUBPARAM_MESSAGE_CENTER_TIME_STAMP);
+                encodeMsgCenterTimeStamp(bData, outStream);
+            }
+            // MTK-END
             return outStream.toByteArray();
         } catch (BitwiseOutputStream.AccessException ex) {
             Rlog.e(LOG_TAG, "BearerData encode failed: " + ex);
@@ -1097,19 +1107,28 @@ public final class BearerData {
         throws CodingException
     {
         try {
-            int offsetBits = offset * 8;
-            int offsetSeptets = (offsetBits + 6) / 7;
-            numFields -= offsetSeptets;
-            int paddingBits = (offsetSeptets * 7) - offsetBits;
-
+            // MTK-START
+            // Calculate the header septets.
+            int headerSeptets = (offset * 8 + 6) / 7;
+            //offset *= 8;
+            // Reduce the headerSeptets form numFields.
+            numFields -= headerSeptets;
+            // MTK-END
             StringBuffer strBuf = new StringBuffer(numFields);
             BitwiseInputStream inStream = new BitwiseInputStream(data);
-            int wantedBits = (offsetSeptets * 7) + (numFields * 7);
+            // MTK-START
+            //int wantedBits = (offset * 8) + (numFields * 7);
+            int wantedBits = (headerSeptets + numFields) * 7;
+            // MTK-END
             if (inStream.available() < wantedBits) {
                 throw new CodingException("insufficient data (wanted " + wantedBits +
                                           " bits, but only have " + inStream.available() + ")");
             }
-            inStream.skip(offsetBits + paddingBits);
+            // MTK-START, Skip the header septets.
+            //inStream.skip(offset);
+            inStream.skip(headerSeptets * 7);
+            // MTK-END
+
             for (int i = 0; i < numFields; i++) {
                 int charCode = inStream.read(7);
                 if ((charCode >= UserData.ASCII_MAP_BASE_INDEX) &&
@@ -1156,22 +1175,6 @@ public final class BearerData {
         throws CodingException
     {
         return decodeCharset(data, offset, numFields, 1, "Shift_JIS");
-    }
-
-    private static String decodeGsmDcs(byte[] data, int offset, int numFields, int msgType)
-            throws CodingException
-    {
-        switch ((msgType >> 2) & 0x3) {
-        case UserData.ENCODING_GSM_DCS_7BIT:
-            return decode7bitGsm(data, offset, numFields);
-        case UserData.ENCODING_GSM_DCS_8BIT:
-            return decodeUtf8(data, offset, numFields);
-        case UserData.ENCODING_GSM_DCS_16BIT:
-            return decodeUtf16(data, offset, numFields);
-        default:
-            throw new CodingException("unsupported user msgType encoding ("
-                    + msgType + ")");
-        }
     }
 
     private static void decodeUserDataPayload(UserData userData, boolean hasUserDataHeader)
@@ -1227,10 +1230,6 @@ public final class BearerData {
             break;
         case UserData.ENCODING_SHIFT_JIS:
             userData.payloadStr = decodeShiftJis(userData.payload, offset, userData.numFields);
-            break;
-        case UserData.ENCODING_GSM_DCS:
-            userData.payloadStr = decodeGsmDcs(userData.payload, offset,
-                    userData.numFields, userData.msgType);
             break;
         default:
             throw new CodingException("unsupported user data encoding ("
@@ -1512,7 +1511,10 @@ public final class BearerData {
         if (paramBits >= EXPECTED_PARAM_SIZE) {
             paramBits -= EXPECTED_PARAM_SIZE;
             decodeSuccess = true;
-            bData.msgCenterTimeStamp = TimeStamp.fromByteArray(inStream.readByteArray(6 * 8));
+            // MTK_START Tell TimeStamp, use UTC TimeZone.
+            bData.msgCenterTimeStamp = TimeStamp.fromByteArray(inStream.readByteArray(6 * 8),
+                    Time.TIMEZONE_UTC);
+            // MTK_END
         }
         if ((! decodeSuccess) || (paramBits > 0)) {
             Rlog.d(LOG_TAG, "MESSAGE_CENTER_TIME_STAMP decode " +
@@ -1570,7 +1572,7 @@ public final class BearerData {
         if (paramBits >= EXPECTED_PARAM_SIZE) {
             paramBits -= EXPECTED_PARAM_SIZE;
             decodeSuccess = true;
-            bData.deferredDeliveryTimeRelative = inStream.read(8);
+            bData.validityPeriodRelative = inStream.read(8);
         }
         if ((! decodeSuccess) || (paramBits > 0)) {
             Rlog.d(LOG_TAG, "VALIDITY_PERIOD_RELATIVE decode " +
@@ -1578,7 +1580,7 @@ public final class BearerData {
                       " (extra bits = " + paramBits + ")");
         }
         inStream.skip(paramBits);
-        bData.deferredDeliveryTimeRelativeSet = decodeSuccess;
+        bData.validityPeriodRelativeSet = decodeSuccess;
         return decodeSuccess;
     }
 
@@ -1590,7 +1592,7 @@ public final class BearerData {
         if (paramBits >= EXPECTED_PARAM_SIZE) {
             paramBits -= EXPECTED_PARAM_SIZE;
             decodeSuccess = true;
-            bData.validityPeriodRelative = inStream.read(8);
+            bData.deferredDeliveryTimeRelative = inStream.read(8);
         }
         if ((! decodeSuccess) || (paramBits > 0)) {
             Rlog.d(LOG_TAG, "DEFERRED_DELIVERY_TIME_RELATIVE decode " +
@@ -1598,7 +1600,7 @@ public final class BearerData {
                       " (extra bits = " + paramBits + ")");
         }
         inStream.skip(paramBits);
-        bData.validityPeriodRelativeSet = decodeSuccess;
+        bData.deferredDeliveryTimeRelativeSet = decodeSuccess;
         return decodeSuccess;
     }
 
@@ -2062,4 +2064,153 @@ public final class BearerData {
         }
         return null;
     }
+
+    // MTK-START
+    /**
+     * Support encode Ems with the octet encoding.
+     * @param uData The user data.
+     * @param udhData The user data header.
+     */
+    private static void encodeOctetEms(UserData uData, byte[] udhData) {
+        int udhBytes = udhData.length + 1;
+        uData.msgEncoding = UserData.ENCODING_OCTET;
+        uData.msgEncodingSet = true;
+        uData.numFields = udhBytes + uData.payload.length;
+        byte[] payload = new byte[uData.numFields];
+        payload[0] = (byte) udhData.length;
+        System.arraycopy(udhData, 0, payload, 1, udhData.length);
+        System.arraycopy(uData.payload, 0, payload, udhBytes, uData.payload.length);
+        uData.payload = payload;
+    }
+
+    /**
+     * Support encode Ems with the 7bitAscii encoding type.
+     * @param uData The user data.
+     * @param udhData The user data header.
+     * @param force If force to use 7bit encode.
+     * @throws CodingException
+     */
+    private static void encode7bitAsciiEms(UserData uData, byte[] udhData, boolean force)
+            throws CodingException
+    {
+            int udhBytes = udhData.length + 1;
+            int udhSeptets = ((udhBytes * 8) + 6) / 7;
+            int msgSeptets = uData.payloadStr.length();
+            try {
+                BitwiseOutputStream outStream =
+                        new BitwiseOutputStream((udhSeptets + msgSeptets) * 7);
+                //Skip user data header.
+                outStream.skip(udhSeptets * 7);
+
+                for (int i = 0; i < msgSeptets; i++) {
+                    int charCode = UserData.charToAscii.get(uData.payloadStr.charAt(i), -1);
+                    if (charCode == -1) {
+                        if (force) {
+                            outStream.write(7, UserData.UNENCODABLE_7_BIT_CHAR);
+                        } else {
+                            throw new CodingException("cannot ASCII encode ("
+                                                      + uData.payloadStr.charAt(i) + ")");
+                        }
+                    } else {
+                        outStream.write(7, charCode);
+                    }
+                }
+
+                uData.payload = outStream.toByteArray();
+                uData.msgEncoding = UserData.ENCODING_7BIT_ASCII;
+                uData.msgEncodingSet = true;
+                uData.numFields = udhSeptets + msgSeptets;
+
+                //Write the header.
+                uData.payload[0] = (byte)udhData.length;
+                System.arraycopy(udhData, 0, uData.payload, 1, udhData.length);
+            } catch (BitwiseOutputStream.AccessException ex) {
+                throw new CodingException("7bit ASCII encode failed: " + ex);
+            }
+            Rlog.d(LOG_TAG, "encode7bitAsciiEms");
+    }
+
+    /**
+     * Calculate the message text encoding length, fragmentation, and other details.
+     *
+     * @param msg message text
+     * @param force7BitEncoding ignore (but still count) illegal characters if true
+     * @param encodingType the encoding type of content of message(GSM 7-bit, Unicode or Automatic)
+     * @return septet count, or -1 on failure
+     */
+    public static TextEncodingDetails calcTextEncodingDetails(CharSequence msg,
+            boolean force7BitEncoding, int encodingType) {
+        TextEncodingDetails ted;
+        int septets = countAsciiSeptets(msg, force7BitEncoding);
+        if(encodingType == SmsConstants.ENCODING_16BIT) {
+            Rlog.d(LOG_TAG, "16bit in cdma");
+            septets = -1;
+        }
+        if (septets != -1 && septets <= SmsConstants.MAX_USER_DATA_SEPTETS) {
+            ted = new TextEncodingDetails();
+            ted.msgCount = 1;
+            ted.codeUnitCount = septets;
+            ted.codeUnitsRemaining = SmsConstants.MAX_USER_DATA_SEPTETS - septets;
+            ted.codeUnitSize = SmsConstants.ENCODING_7BIT;
+        } else {
+            //Rlog.d(LOG_TAG, "(divide message use this)sync with send method, when send, use " +
+            //        "sSmsInterfaces.calcTextEncodingDetails(msg, force7BitEncoding) to" +
+            //        " get encode type and send with the encode type, search XXXXXX for send");
+            /*ted = com.android.internal.telephony.gsm.SmsMessage.calculateLength(
+                    msg, force7BitEncoding, encodingType);*/
+            Rlog.d(LOG_TAG, "gsm can understand the control character, but cdma ignore it(<0x20)");
+            ted = calcTextEncodingDetails(msg, force7BitEncoding, true);
+            if (ted.msgCount == 1 && ted.codeUnitSize == SmsConstants.ENCODING_7BIT) {
+                // We don't support single-segment EMS, so calculate for 16-bit
+                // TODO: Consider supporting single-segment EMS
+                ted.codeUnitCount = msg.length();
+                int octets = ted.codeUnitCount * 2;
+                if (octets > SmsConstants.MAX_USER_DATA_BYTES) {
+                    ted.msgCount = (octets + (SmsConstants.MAX_USER_DATA_BYTES_WITH_HEADER - 1)) /
+                            SmsConstants.MAX_USER_DATA_BYTES_WITH_HEADER;
+                    ted.codeUnitsRemaining = ((ted.msgCount *
+                            SmsConstants.MAX_USER_DATA_BYTES_WITH_HEADER) - octets) / 2;
+                } else {
+                    ted.msgCount = 1;
+                    ted.codeUnitsRemaining = (SmsConstants.MAX_USER_DATA_BYTES - octets)/2;
+                }
+                ted.codeUnitSize = SmsConstants.ENCODING_16BIT;
+            }
+        }
+        return ted;
+    }
+
+    /**
+     * Convert the int to the BCD byte.
+     * @param value The int need to be converted.
+     * @return the BCD byte for value.
+     */
+    private static byte cdmaIntToBcdByte(int value) {
+        byte ret = 0;
+        value = value % 100;
+        ret = (byte) (((value / 10) << 4) | (value % 10));
+        return ret;
+    }
+
+    /**
+     * Encode the message centre time into the BearerData.
+     * @param bData The bearer data.
+     * @param outStream the output stream for PDU.
+     * @throws BitwiseOutputStream.AccessException
+     */
+    private static void encodeMsgCenterTimeStamp(BearerData bData, BitwiseOutputStream outStream)
+            throws BitwiseOutputStream.AccessException {
+        outStream.write(8, 6);
+        int year = bData.msgCenterTimeStamp.year - 2000;
+        if (year < 0) {
+            year = bData.msgCenterTimeStamp.year - 1900;
+        }
+        outStream.write(8, cdmaIntToBcdByte(year));
+        outStream.write(8, cdmaIntToBcdByte(bData.msgCenterTimeStamp.month + 1));
+        outStream.write(8, cdmaIntToBcdByte(bData.msgCenterTimeStamp.monthDay));
+        outStream.write(8, cdmaIntToBcdByte(bData.msgCenterTimeStamp.hour));
+        outStream.write(8, cdmaIntToBcdByte(bData.msgCenterTimeStamp.minute));
+        outStream.write(8, cdmaIntToBcdByte(bData.msgCenterTimeStamp.second));
+    }
+    // MTK-END
 }

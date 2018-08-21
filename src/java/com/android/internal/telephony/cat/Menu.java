@@ -38,6 +38,16 @@ public class Menu implements Parcelable {
     public boolean helpAvailable;
     public boolean titleIconSelfExplanatory;
     public boolean itemsIconSelfExplanatory;
+    // ICS Migration start
+    /**
+       * Add the variable for the tag nextActionIndicator
+       * @internal
+       */
+    public byte[] nextActionIndicator;
+
+    // ICS Migration end
+    /* Add the flag to check the command is from modem or DB when the command is SET_UP_MENU */
+    public int mFromMD;
 
     public Menu() {
         // Create an empty list.
@@ -52,6 +62,11 @@ public class Menu implements Parcelable {
         titleIcon = null;
         // set default style to be navigation menu.
         presentationType = PresentationType.NAVIGATION_OPTIONS;
+        // Add by Huibin Mao Mtk80229
+        // ICS Migration start
+        nextActionIndicator = null;
+        // ICS Migration end
+        mFromMD = 0;
     }
 
     private Menu(Parcel in) {
@@ -70,6 +85,18 @@ public class Menu implements Parcelable {
         titleIconSelfExplanatory = in.readInt() == 1 ? true : false;
         itemsIconSelfExplanatory = in.readInt() == 1 ? true : false;
         presentationType = PresentationType.values()[in.readInt()];
+        mFromMD = in.readInt();
+        // Add by Huibin Mao Mtk80229
+        // ICS Migration start
+        int naiLen = in.readInt();
+        if (naiLen <= 0) {
+            nextActionIndicator = null;
+        } else {
+            nextActionIndicator = new byte[naiLen];
+            in.readByteArray(nextActionIndicator);
+        }
+        // ICS Migration end
+        CatLog.d("[Menu]", "Menu: " + mFromMD);
     }
 
     @Override
@@ -93,6 +120,15 @@ public class Menu implements Parcelable {
         dest.writeInt(titleIconSelfExplanatory ? 1 : 0);
         dest.writeInt(itemsIconSelfExplanatory ? 1 : 0);
         dest.writeInt(presentationType.ordinal());
+        dest.writeInt(mFromMD);
+        // Add by Huibin Mao Mtk80229
+        // ICS Migration start
+        dest.writeInt(nextActionIndicator == null ? -1 : nextActionIndicator.length);
+        if (nextActionIndicator != null && nextActionIndicator.length > 0) {
+            dest.writeByteArray(nextActionIndicator);
+        }
+        // ICS Migration end
+        CatLog.d("[Menu]", "writeToParcel: " + mFromMD);
     }
 
     public static final Parcelable.Creator<Menu> CREATOR = new Parcelable.Creator<Menu>() {
@@ -106,4 +142,16 @@ public class Menu implements Parcelable {
             return new Menu[size];
         }
     };
+
+    /**
+     * Check the command SET_UP_MENU which is from modem or sharepreference
+     * @internal
+     */
+    public int getSetUpMenuFlag() {
+        return mFromMD;
+    }
+
+    public void setSetUpMenuFlag(int FromMD) {
+        mFromMD = FromMD;
+    }
 }

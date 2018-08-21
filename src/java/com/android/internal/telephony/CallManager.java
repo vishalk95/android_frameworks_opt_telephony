@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2010 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +36,9 @@ import android.telephony.TelephonyManager;
 import android.telephony.PhoneStateListener;
 import android.telephony.ServiceState;
 import android.telephony.Rlog;
+/// M: CC051: Convert phoneId-based to subId-based API for CallManager bug fix @{
+import android.telephony.SubscriptionManager;
+/// @}
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -60,7 +68,7 @@ public final class CallManager {
 
     private static final String LOG_TAG ="CallManager";
     private static final boolean DBG = true;
-    private static final boolean VDBG = false;
+    private static final boolean VDBG = true;
 
     private static final int EVENT_DISCONNECT = 100;
     private static final int EVENT_PRECISE_CALL_STATE_CHANGED = 101;
@@ -86,7 +94,6 @@ public final class CallManager {
     // FIXME Taken from klp-sprout-dev but setAudioMode was removed in L.
     //private static final int EVENT_RADIO_OFF_OR_NOT_AVAILABLE = 121;
     private static final int EVENT_TTY_MODE_RECEIVED = 122;
-    private static final int EVENT_SUPP_SERVICE_NOTIFY = 123;
 
     // Singleton instance
     private static final CallManager INSTANCE = new CallManager();
@@ -115,8 +122,6 @@ public final class CallManager {
     private boolean mSpeedUpAudioForMtCall = false;
     // FIXME Taken from klp-sprout-dev but setAudioMode was removed in L.
     //private boolean mIsEccDialing = false;
-
-    private Object mRegistrantidentifier = new Object();
 
     // state registrants
     protected final RegistrantList mPreciseCallStateRegistrants
@@ -176,9 +181,6 @@ public final class CallManager {
     protected final RegistrantList mSubscriptionInfoReadyRegistrants
     = new RegistrantList();
 
-    protected final RegistrantList mSuppServiceNotifyRegistrants
-    = new RegistrantList();
-
     protected final RegistrantList mSuppServiceFailedRegistrants
     = new RegistrantList();
 
@@ -190,6 +192,11 @@ public final class CallManager {
 
     protected final RegistrantList mTtyModeReceivedRegistrants
     = new RegistrantList();
+
+    /* M: SS part */
+    private long mLastMmiCompletedTime = 0;
+    private static final long MMI_COMPLETED_MIN_INTERVAL = 100;
+    /* M: SS part end */
 
     private CallManager() {
         mPhones = new ArrayList<Phone>();
@@ -598,10 +605,6 @@ public final class CallManager {
         return ((defaultPhone == null) ? null : defaultPhone.getContext());
     }
 
-    public Object getRegistrantIdentifier() {
-        return mRegistrantidentifier;
-    }
-
     private void registerForPhoneStates(Phone phone) {
         // We need to keep a mapping of handler to Phone for proper unregistration.
         // TODO: Clean up this solution as it is just a work around for each Phone instance
@@ -619,46 +622,23 @@ public final class CallManager {
         mHandlerMap.put(phone, handler);
 
         // for common events supported by all phones
-        // The mRegistrantIdentifier passed here, is to identify in the PhoneBase
-        // that the registrants are coming from the CallManager.
-        phone.registerForPreciseCallStateChanged(handler, EVENT_PRECISE_CALL_STATE_CHANGED,
-                mRegistrantidentifier);
-        phone.registerForDisconnect(handler, EVENT_DISCONNECT,
-                mRegistrantidentifier);
-        phone.registerForNewRingingConnection(handler, EVENT_NEW_RINGING_CONNECTION,
-                mRegistrantidentifier);
-        phone.registerForUnknownConnection(handler, EVENT_UNKNOWN_CONNECTION,
-                mRegistrantidentifier);
-        phone.registerForIncomingRing(handler, EVENT_INCOMING_RING,
-                mRegistrantidentifier);
-        phone.registerForRingbackTone(handler, EVENT_RINGBACK_TONE,
-                mRegistrantidentifier);
-        phone.registerForInCallVoicePrivacyOn(handler, EVENT_IN_CALL_VOICE_PRIVACY_ON,
-                mRegistrantidentifier);
-        phone.registerForInCallVoicePrivacyOff(handler, EVENT_IN_CALL_VOICE_PRIVACY_OFF,
-                mRegistrantidentifier);
-        phone.registerForDisplayInfo(handler, EVENT_DISPLAY_INFO,
-                mRegistrantidentifier);
-        phone.registerForSignalInfo(handler, EVENT_SIGNAL_INFO,
-                mRegistrantidentifier);
-        phone.registerForResendIncallMute(handler, EVENT_RESEND_INCALL_MUTE,
-                mRegistrantidentifier);
-        phone.registerForMmiInitiate(handler, EVENT_MMI_INITIATE,
-                mRegistrantidentifier);
-        phone.registerForMmiComplete(handler, EVENT_MMI_COMPLETE,
-                mRegistrantidentifier);
-        phone.registerForSuppServiceFailed(handler, EVENT_SUPP_SERVICE_FAILED,
-                mRegistrantidentifier);
-        phone.registerForServiceStateChanged(handler, EVENT_SERVICE_STATE_CHANGED,
-                mRegistrantidentifier);
-
+        phone.registerForPreciseCallStateChanged(handler, EVENT_PRECISE_CALL_STATE_CHANGED, null);
+        phone.registerForDisconnect(handler, EVENT_DISCONNECT, null);
+        phone.registerForNewRingingConnection(handler, EVENT_NEW_RINGING_CONNECTION, null);
+        phone.registerForUnknownConnection(handler, EVENT_UNKNOWN_CONNECTION, null);
+        phone.registerForIncomingRing(handler, EVENT_INCOMING_RING, null);
+        phone.registerForRingbackTone(handler, EVENT_RINGBACK_TONE, null);
+        phone.registerForInCallVoicePrivacyOn(handler, EVENT_IN_CALL_VOICE_PRIVACY_ON, null);
+        phone.registerForInCallVoicePrivacyOff(handler, EVENT_IN_CALL_VOICE_PRIVACY_OFF, null);
+        phone.registerForDisplayInfo(handler, EVENT_DISPLAY_INFO, null);
+        phone.registerForSignalInfo(handler, EVENT_SIGNAL_INFO, null);
+        phone.registerForResendIncallMute(handler, EVENT_RESEND_INCALL_MUTE, null);
+        phone.registerForMmiInitiate(handler, EVENT_MMI_INITIATE, null);
+        phone.registerForMmiComplete(handler, EVENT_MMI_COMPLETE, null);
+        phone.registerForSuppServiceFailed(handler, EVENT_SUPP_SERVICE_FAILED, null);
+        phone.registerForServiceStateChanged(handler, EVENT_SERVICE_STATE_CHANGED, null);
         // FIXME Taken from klp-sprout-dev but setAudioMode was removed in L.
         //phone.registerForRadioOffOrNotAvailable(handler, EVENT_RADIO_OFF_OR_NOT_AVAILABLE, null);
-
-        // for events supported only by GSM phone
-        if (phone.getPhoneType() == PhoneConstants.PHONE_TYPE_GSM) {
-            phone.registerForSuppServiceNotification(handler, EVENT_SUPP_SERVICE_NOTIFY, null);
-        }
 
         // for events supported only by GSM, CDMA and IMS phone
         if (phone.getPhoneType() == PhoneConstants.PHONE_TYPE_GSM ||
@@ -686,7 +666,7 @@ public final class CallManager {
     private void unregisterForPhoneStates(Phone phone) {
         // Make sure that we clean up our map of handlers to Phones.
         CallManagerHandler handler = mHandlerMap.get(phone);
-        if (handler == null) {
+        if (handler != null) {
             Rlog.e(LOG_TAG, "Could not find Phone handler for unregistration");
             return;
         }
@@ -711,11 +691,6 @@ public final class CallManager {
         phone.unregisterForTtyModeReceived(handler);
         // FIXME Taken from klp-sprout-dev but setAudioMode was removed in L.
         //phone.unregisterForRadioOffOrNotAvailable(handler);
-
-        // for events supported only by GSM phone
-        if (phone.getPhoneType() == PhoneConstants.PHONE_TYPE_GSM) {
-            phone.unregisterForSuppServiceNotification(handler);
-        }
 
         // for events supported only by GSM, CDMA and IMS phone
         if (phone.getPhoneType() == PhoneConstants.PHONE_TYPE_GSM ||
@@ -1615,28 +1590,6 @@ public final class CallManager {
     }
 
     /**
-     * Register for supplementary service notifications.
-     * Message.obj will contain an AsyncResult.
-     *
-     * @param h Handler that receives the notification message.
-     * @param what User-defined message code.
-     * @param obj User object.
-     */
-    public void registerForSuppServiceNotification(Handler h, int what, Object obj) {
-        mSuppServiceNotifyRegistrants.addUnique(h, what, obj);
-    }
-
-    /**
-     * Unregister for supplementary service notifications.
-     * Extraneous calls are tolerated silently
-     *
-     * @param h Handler to be removed from the registrant list.
-     */
-    public void unregisterForSuppServiceNotification(Handler h) {
-        mSuppServiceNotifyRegistrants.remove(h);
-    }
-
-    /**
      * Register for notifications when a supplementary service attempt fails.
      * Message.obj will contain an AsyncResult.
      *
@@ -2355,14 +2308,18 @@ public final class CallManager {
                     if (VDBG) Rlog.d(LOG_TAG, " handleMessage (EVENT_NEW_RINGING_CONNECTION)");
                     Connection c = (Connection) ((AsyncResult) msg.obj).result;
                     int subId = c.getCall().getPhone().getSubId();
-                    if (getActiveFgCallState(subId).isDialing() ||
-                            hasMoreThanOneRingingCall(subId)) {
+                    if (getActiveFgCallState(subId).isDialing() || hasMoreThanOneRingingCall()) {
+                        /// M: CC050: Remove handling for MO/MT conflict, not hangup MT @{
+                        //if (VDBG) Rlog.d(LOG_TAG, "MO/MT conflict! MO should be hangup by MD");
+                        /*
                         try {
                             Rlog.d(LOG_TAG, "silently drop incoming call: " + c.getCall());
                             c.getCall().hangup();
                         } catch (CallStateException e) {
                             Rlog.w(LOG_TAG, "new ringing connection", e);
                         }
+                        */
+                        /// @}
                     } else {
                         mNewRingingConnectionRegistrants.notifyRegistrants((AsyncResult) msg.obj);
                     }
@@ -2416,6 +2373,18 @@ public final class CallManager {
                     break;
                 case EVENT_MMI_COMPLETE:
                     if (VDBG) Rlog.d(LOG_TAG, " handleMessage (EVENT_MMI_COMPLETE)");
+                    /* M: SS part */
+                    if (VDBG) {
+                        Rlog.d(LOG_TAG, " handleMessage (EVENT_MMI_COMPLETE)"
+                            + ", handler = " + this);
+                    }
+                    long curTime = System.currentTimeMillis();
+                    if ((curTime >= mLastMmiCompletedTime)
+                            && ((curTime - mLastMmiCompletedTime) < MMI_COMPLETED_MIN_INTERVAL)) {
+                        break;
+                    }
+                    mLastMmiCompletedTime = curTime;
+                    /* M: SS part end */
                     mMmiCompleteRegistrants.notifyRegistrants((AsyncResult) msg.obj);
                     break;
                 case EVENT_ECM_TIMER_RESET:
@@ -2425,10 +2394,6 @@ public final class CallManager {
                 case EVENT_SUBSCRIPTION_INFO_READY:
                     if (VDBG) Rlog.d(LOG_TAG, " handleMessage (EVENT_SUBSCRIPTION_INFO_READY)");
                     mSubscriptionInfoReadyRegistrants.notifyRegistrants((AsyncResult) msg.obj);
-                    break;
-                case EVENT_SUPP_SERVICE_NOTIFY:
-                    if (VDBG) Rlog.d(LOG_TAG, " handleMessage (EVENT_SUPP_SERVICE_NOTIFY)");
-                    mSuppServiceNotifyRegistrants.notifyRegistrants((AsyncResult) msg.obj);
                     break;
                 case EVENT_SUPP_SERVICE_FAILED:
                     if (VDBG) Rlog.d(LOG_TAG, " handleMessage (EVENT_SUPP_SERVICE_FAILED)");
@@ -2475,25 +2440,28 @@ public final class CallManager {
         Call call;
         StringBuilder b = new StringBuilder();
         for (int i = 0; i < TelephonyManager.getDefault().getPhoneCount(); i++) {
+            /// M: CC051: Convert phoneId-based to subId-based API for CallManager bug fix @{
+            int subId = SubscriptionManager.getSubIdUsingPhoneId(i);
             b.append("CallManager {");
-            b.append("\nstate = " + getState(i));
-            call = getActiveFgCall(i);
+            b.append("\nstate = " + getState(subId));
+            call = getActiveFgCall(subId);
             if (call != null) {
-                b.append("\n- Foreground: " + getActiveFgCallState(i));
+                b.append("\n- Foreground: " + getActiveFgCallState(subId));
                 b.append(" from " + call.getPhone());
-                b.append("\n  Conn: ").append(getFgCallConnections(i));
+                b.append("\n  Conn: ").append(getFgCallConnections(subId));
             }
-            call = getFirstActiveBgCall(i);
+            call = getFirstActiveBgCall(subId);
             if (call != null) {
                 b.append("\n- Background: " + call.getState());
                 b.append(" from " + call.getPhone());
-                b.append("\n  Conn: ").append(getBgCallConnections(i));
+                b.append("\n  Conn: ").append(getBgCallConnections(subId));
             }
-            call = getFirstActiveRingingCall(i);
+            call = getFirstActiveRingingCall(subId);
             if (call != null) {
                 b.append("\n- Ringing: " +call.getState());
                 b.append(" from " + call.getPhone());
             }
+            /// @}
         }
 
         for (Phone phone : getAllPhones()) {

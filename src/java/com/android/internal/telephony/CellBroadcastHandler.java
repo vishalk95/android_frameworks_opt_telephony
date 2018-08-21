@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2013 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -75,6 +80,17 @@ public class CellBroadcastHandler extends WakeLockStateMachine {
      * @param message the Cell Broadcast to broadcast
      */
     protected void handleBroadcastSms(SmsCbMessage message) {
+        // MTK-START
+        handleBroadcastSms(message, false);
+        // MTK-END
+    }
+
+    // MTK-START
+    /**
+     * Dispatch a Cell Broadcast message to listeners.
+     * @param message the Cell Broadcast to broadcast
+     */
+    protected void handleBroadcastSms(SmsCbMessage message, boolean isPrimary) {
         String receiverPermission;
         int appOp;
 
@@ -82,6 +98,9 @@ public class CellBroadcastHandler extends WakeLockStateMachine {
         if (message.isEmergencyMessage()) {
             log("Dispatching emergency SMS CB, SmsCbMessage is: " + message);
             intent = new Intent(Telephony.Sms.Intents.SMS_EMERGENCY_CB_RECEIVED_ACTION);
+            // MTK-START
+            intent.putExtra(SmsConstants.IS_EMERGENCY_CB_PRIMARY, isPrimary);
+            // MTK-END
             receiverPermission = Manifest.permission.RECEIVE_EMERGENCY_BROADCAST;
             appOp = AppOpsManager.OP_RECEIVE_EMERGECY_SMS;
         } else {
@@ -95,4 +114,17 @@ public class CellBroadcastHandler extends WakeLockStateMachine {
         mContext.sendOrderedBroadcastAsUser(intent, UserHandle.ALL, receiverPermission, appOp,
                 mReceiver, getHandler(), Activity.RESULT_OK, null, null);
     }
+
+    /**
+     * Implemented by subclass to handle messages in {@link IdleState}.
+     * It is used to handle the ETWS primary notification. The different
+     * domain should handle by itself. Default will not handle this message.
+     * @param message the message to process
+     * @return true to transition to {@link WaitingState}; false to stay in {@link IdleState}
+     */
+    @Override
+    protected boolean handleEtwsPrimaryNotification(Message message) {
+        return false;
+    }
+    // MTK-END
 }

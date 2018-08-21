@@ -367,4 +367,9 @@ public final class CdmaMmiCode  extends Handler implements MmiCode {
         mPhone.onMMIDone(this);
     }
 
+    //M: TODO: Check
+    public boolean getUserInitiatedMMI() {
+       return false;
+    }
+
 }

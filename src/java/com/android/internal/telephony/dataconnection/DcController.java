@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2013 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +30,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Message;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.telephony.DataConnectionRealTimeInfo;
 import android.telephony.TelephonyManager;
 import android.telephony.PhoneStateListener;
@@ -33,7 +39,6 @@ import android.telephony.Rlog;
 import com.android.internal.telephony.DctConstants;
 import com.android.internal.telephony.PhoneBase;
 import com.android.internal.telephony.PhoneConstants;
-import com.android.internal.telephony.dataconnection.DataConnection.ConnectionParams;
 import com.android.internal.telephony.dataconnection.DataConnection.UpdateLinkPropertyResult;
 import com.android.internal.util.State;
 import com.android.internal.util.StateMachine;
@@ -41,14 +46,21 @@ import com.android.internal.util.StateMachine;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.ConcurrentModificationException;
 import java.util.HashMap;
+import android.text.TextUtils;
+
+/** M: start */
+import android.net.LinkProperties;
+/** M: end */
+
 
 /**
  * Data Connection Controller which is a package visible class and controls
  * multiple data connections. For instance listening for unsolicited messages
  * and then demultiplexing them to the appropriate DC.
  */
-public class DcController extends StateMachine {
+class DcController extends StateMachine {
     private static final boolean DBG = true;
     private static final boolean VDBG = false;
 
@@ -83,6 +95,11 @@ public class DcController extends StateMachine {
     //mExecutingCarrierChange tracks whether the phone is currently executing
     //carrier network change
     private volatile boolean mExecutingCarrierChange;
+
+    private static final boolean SVLTE_SUPPORT = SystemProperties.get("ro.mtk_svlte_support")
+            .equals("1") ? true : false;
+    private static final boolean SRLTE_SUPPORT = SystemProperties.get("ro.mtk_srlte_support")
+            .equals("1") ? true : false;
 
     /**
      * Constructor.
@@ -146,14 +163,26 @@ public class DcController extends StateMachine {
     }
 
     void removeActiveDcByCid(DataConnection dc) {
-        DataConnection removedDc = mDcListActiveByCid.remove(dc.mCid);
-        if (DBG && removedDc == null) {
-            log("removeActiveDcByCid removedDc=null dc=" + dc);
+        DataConnection removedDc = null;
+        try {
+            removedDc = mDcListActiveByCid.remove(dc.mCid);
+            if (DBG && removedDc == null) {
+                log("removeActiveDcByCid removedDc=null dc.mCid=" + dc.mCid);
+            }
+        } catch (ConcurrentModificationException e) {
+            log("concurrentModificationException happened!!");
         }
     }
 
     boolean isExecutingCarrierChange() {
         return mExecutingCarrierChange;
+    }
+
+    // MTK
+    void getDataCallListForSimLoaded() {
+        log("getDataCallList");
+        mPhone.mCi.getDataCallList(obtainMessage(
+                DataConnection.EVENT_DATA_STATE_CHANGED_FOR_LOADED));
     }
 
     private class DccDefaultState extends State {
@@ -198,13 +227,23 @@ public class DcController extends StateMachine {
                     break;
 
                 case DataConnection.EVENT_DATA_STATE_CHANGED:
-                    ar = (AsyncResult)msg.obj;
+                    ar = (AsyncResult) msg.obj;
                     if (ar.exception == null) {
-                        onDataStateChanged((ArrayList<DataCallResponse>)ar.result);
+                        onDataStateChanged((ArrayList<DataCallResponse>) ar.result, false);
                     } else {
                         log("DccDefaultState: EVENT_DATA_STATE_CHANGED:" +
                                     " exception; likely radio not available, ignore");
                     }
+                    break;
+                case DataConnection.EVENT_DATA_STATE_CHANGED_FOR_LOADED:
+                    ar = (AsyncResult) msg.obj;
+                    if (ar.exception == null) {
+                        onDataStateChanged((ArrayList<DataCallResponse>) ar.result, true);
+                    } else {
+                        log("DccDefaultState: EVENT_DATA_STATE_CHANGED:" +
+                                    " exception; likely radio not available, ignore");
+                    }
+                    mDct.sendMessage(obtainMessage(DctConstants.EVENT_SETUP_DATA_WHEN_LOADED));
                     break;
             }
             return HANDLED;
@@ -214,7 +253,8 @@ public class DcController extends StateMachine {
          * Process the new list of "known" Data Calls
          * @param dcsList as sent by RIL_UNSOL_DATA_CALL_LIST_CHANGED
          */
-        private void onDataStateChanged(ArrayList<DataCallResponse> dcsList) {
+        private void onDataStateChanged(ArrayList<DataCallResponse> dcsList,
+                boolean isRecordLoaded) {
             if (DBG) {
                 lr("onDataStateChanged: dcsList=" + dcsList
                         + " mDcListActiveByCid=" + mDcListActiveByCid);
@@ -254,6 +294,12 @@ public class DcController extends StateMachine {
                 if (dc == null) {
                     // UNSOL_DATA_CALL_LIST_CHANGED arrived before SETUP_DATA_CALL completed.
                     loge("onDataStateChanged: no associated DC yet, ignore");
+
+                    // MTK: Deactivate unlinked PDP context
+                    loge("Deactivate unlinked PDP context.");
+                    mDct.deactivatePdpByCid(newState.cid);
+                    // MTK
+
                     continue;
                 }
 
@@ -266,7 +312,7 @@ public class DcController extends StateMachine {
                             + " newState=" + newState.toString());
                     if (newState.active == DATA_CONNECTION_ACTIVE_PH_LINK_INACTIVE) {
                         if (mDct.mIsCleanupRequired) {
-                            apnsToCleanup.addAll(dc.mApnContexts.keySet());
+                            apnsToCleanup.addAll(dc.mApnContexts);
                             mDct.mIsCleanupRequired = false;
                         } else {
                             DcFailCause failCause = DcFailCause.fromInt(newState.status);
@@ -276,21 +322,10 @@ public class DcController extends StateMachine {
                                 mDct.sendRestartRadio();
                             } else if (mDct.isPermanentFail(failCause)) {
                                 if (DBG) log("onDataStateChanged: inactive, add to cleanup list");
-                                apnsToCleanup.addAll(dc.mApnContexts.keySet());
+                                apnsToCleanup.addAll(dc.mApnContexts);
                             } else {
-                                for (ConnectionParams cp : dc.mApnContexts.values()) {
-                                    ApnContext apnContext = cp.mApnContext;
-                                    if (apnContext.isEnabled()) {
-                                        if (DBG) {
-                                            log("onDataStateChanged: inactive, add to retry list");
-                                        }
-                                        dcsToRetry.add(dc);
-                                        break;
-                                    } else {
-                                        apnsToCleanup.add(apnContext);
-                                        if (DBG) log("APN is disabled, not retrying.");
-                                    }
-                                }
+                                if (DBG) log("onDataStateChanged: inactive, add to retry list");
+                                dcsToRetry.add(dc);
                             }
                         }
                     } else {
@@ -303,7 +338,7 @@ public class DcController extends StateMachine {
                                 if (! result.oldLp.isIdenticalDnses(result.newLp) ||
                                         ! result.oldLp.isIdenticalRoutes(result.newLp) ||
                                         ! result.oldLp.isIdenticalHttpProxy(result.newLp) ||
-                                        ! result.oldLp.isIdenticalAddresses(result.newLp)) {
+                                        ! isIpMatched(result.oldLp, result.newLp)) {
                                     // If the same address type was removed and
                                     // added we need to cleanup
                                     CompareResult<LinkAddress> car =
@@ -323,6 +358,14 @@ public class DcController extends StateMachine {
                                             }
                                         }
                                     }
+                                    /// M: Don't clean DC when IP changed for IRAT.
+                                    if ((SVLTE_SUPPORT || SRLTE_SUPPORT) &&
+                                            mPhone.getPhoneType() ==
+                                            PhoneConstants.PHONE_TYPE_CDMA) {
+                                        log("Set needToClean to false, previous value is " +
+                                            needToClean);
+                                        needToClean = false;
+                                    }
                                     if (needToClean) {
                                         if (DBG) {
                                             log("onDataStateChanged: addr change," +
@@ -330,11 +373,11 @@ public class DcController extends StateMachine {
                                                     " oldLp=" + result.oldLp +
                                                     " newLp=" + result.newLp);
                                         }
-                                        apnsToCleanup.addAll(dc.mApnContexts.keySet());
+                                        apnsToCleanup.addAll(dc.mApnContexts);
                                     } else {
                                         if (DBG) log("onDataStateChanged: simple change");
 
-                                        for (ApnContext apnContext : dc.mApnContexts.keySet()) {
+                                        for (ApnContext apnContext : dc.mApnContexts) {
                                              mPhone.notifyDataConnection(
                                                  PhoneConstants.REASON_LINK_PROPERTIES_CHANGED,
                                                  apnContext.getApnType());
@@ -346,7 +389,7 @@ public class DcController extends StateMachine {
                                     }
                                 }
                             } else {
-                                apnsToCleanup.addAll(dc.mApnContexts.keySet());
+                                apnsToCleanup.addAll(dc.mApnContexts);
                                 if (DBG) {
                                     log("onDataStateChanged: interface change, cleanup apns="
                                             + dc.mApnContexts);
@@ -378,6 +421,9 @@ public class DcController extends StateMachine {
                 mDct.sendStopNetStatPoll(DctConstants.Activity.DORMANT);
                 newOverallDataConnectionActiveState = DATA_CONNECTION_ACTIVE_PH_LINK_DORMANT;
             } else {
+                //Fixed:[ALPS01782373] SIM 1 Data icon should shows
+                //when you send a MMS by SIM2.(once)
+                mDct.sendStartNetStatPoll(DctConstants.Activity.NONE);
                 if (DBG) {
                     log("onDataStateChanged: Data Activity updated to NONE. " +
                             "isAnyDataCallActive = " + isAnyDataCallActive +
@@ -385,7 +431,7 @@ public class DcController extends StateMachine {
                 }
                 if (isAnyDataCallActive) {
                     newOverallDataConnectionActiveState = DATA_CONNECTION_ACTIVE_PH_LINK_UP;
-                    mDct.sendStartNetStatPoll(DctConstants.Activity.NONE);
+                    //mDct.sendStartNetStatPoll(DctConstants.Activity.NONE);
                 } else {
                     newOverallDataConnectionActiveState = DATA_CONNECTION_ACTIVE_PH_LINK_INACTIVE;
                 }
@@ -424,13 +470,19 @@ public class DcController extends StateMachine {
                mDct.sendCleanUpConnection(true, apnContext);
             }
 
+            int isLoaded = isRecordLoaded ? 1 : 0;
             // Retry connections that have disappeared
             for (DataConnection dc : dcsToRetry) {
-                if (DBG) log("onDataStateChanged: send EVENT_LOST_CONNECTION dc.mTag=" + dc.mTag);
-                dc.sendMessage(DataConnection.EVENT_LOST_CONNECTION, dc.mTag);
+                if (DBG) {
+                    log("onDataStateChanged: send EVENT_LOST_CONNECTION dc.mTag="
+                            + dc.mTag + "isLoaded:" + isLoaded);
+                }
+                dc.sendMessage(DataConnection.EVENT_LOST_CONNECTION, dc.mTag, isLoaded);
             }
 
-            if (DBG) log("onDataStateChanged: X");
+            if (DBG) {
+                log("onDataStateChanged: X");
+            }
         }
     }
 
@@ -476,5 +528,18 @@ public class DcController extends StateMachine {
         pw.println(" mPhone=" + mPhone);
         pw.println(" mDcListAll=" + mDcListAll);
         pw.println(" mDcListActiveByCid=" + mDcListActiveByCid);
+    }
+
+    /** M: if new IP contains old IP, we treat is equally
+     *  This is to handle that network response both IPv4 and IPv6 IP,
+     *  but APN settings is IPv4 or IPv6
+     */
+    private boolean isIpMatched(LinkProperties oldLp, LinkProperties newLp) {
+        if (oldLp.isIdenticalAddresses(newLp)) {
+            return true;
+        } else {
+            if (DBG) log("isIpMatched: address count is different but matched");
+            return newLp.getAddresses().containsAll(oldLp.getAddresses());
+        }
     }
 }

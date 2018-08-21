@@ -18,6 +18,7 @@ package com.android.internal.telephony;
 
 import android.telephony.CellInfo;
 import android.telephony.DataConnectionRealTimeInfo;
+import android.telephony.ServiceState;
 import android.telephony.VoLteServiceState;
 
 import java.util.List;
@@ -48,6 +49,14 @@ public interface PhoneNotifier {
     public void notifyDataActivity(Phone sender);
 
     public void notifyOtaspChanged(Phone sender, int otaspMode);
+
+    // M: [LTE][Low Power][UL traffic shaping] Start
+    public void notifyLteAccessStratumChanged(Phone sender, String state);
+
+    public void notifyPsNetworkTypeChanged(Phone sender, int nwType);
+
+    public void notifySharedDefaultApnStateChanged(Phone sender, boolean isSharedDefaultApn);
+    // M: [LTE][Low Power][UL traffic shaping] End
 
     public void notifyCellInfo(Phone sender, List<CellInfo> cellInfo);
 

@@ -17,6 +17,7 @@
 package com.android.internal.telephony;
 
 import android.telephony.Rlog;
+import android.telephony.TelephonyManager;
 
 import com.android.internal.telephony.Phone;
 
@@ -105,6 +106,11 @@ public class TelephonyCapabilities {
         if (phone.getPhoneType() == PhoneConstants.PHONE_TYPE_GSM) {
             return com.android.internal.R.string.imei;
         } else if (phone.getPhoneType() == PhoneConstants.PHONE_TYPE_CDMA) {
+            if (TelephonyManager.getDefault().getLteOnCdmaMode()
+                 == PhoneConstants.LTE_ON_CDMA_TRUE) {
+                Rlog.d(LOG_TAG, "getDeviceIdLabel, imei");
+                return com.android.internal.R.string.imei;
+            }
             return com.android.internal.R.string.meid;
         } else {
             Rlog.w(LOG_TAG, "getDeviceIdLabel: no known label for phone "
@@ -179,8 +185,7 @@ public class TelephonyCapabilities {
      * something more appropriate.
      */
     public static boolean supportsAdn(int phoneType) {
-        return ((phoneType == PhoneConstants.PHONE_TYPE_GSM)
-                || (phoneType == PhoneConstants.PHONE_TYPE_CDMA));
+        return phoneType == PhoneConstants.PHONE_TYPE_GSM;
     }
 
     /**

@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2011 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
@@ -80,11 +85,15 @@ public class CellBroadcastMessage implements Parcelable {
         mIsRead = false;
     }
 
-    private CellBroadcastMessage(SmsCbMessage message, long deliveryTime, boolean isRead) {
+    // MTK-START
+    private CellBroadcastMessage(int subId, SmsCbMessage message, long deliveryTime,
+            boolean isRead) {
+        mSubId = subId;
         mSmsCbMessage = message;
         mDeliveryTime = deliveryTime;
         mIsRead = isRead;
     }
+    // MTK-END
 
     private CellBroadcastMessage(Parcel in) {
         mSmsCbMessage = new SmsCbMessage(in);
@@ -243,7 +252,12 @@ public class CellBroadcastMessage implements Parcelable {
         boolean isRead = (cursor.getInt(cursor.getColumnIndexOrThrow(
                 Telephony.CellBroadcasts.MESSAGE_READ)) != 0);
 
-        return new CellBroadcastMessage(msg, deliveryTime, isRead);
+        // MTK-START
+        int subId = cursor.getInt(
+                cursor.getColumnIndexOrThrow(Telephony.CellBroadcasts.SUBSCRIPTION_ID));
+
+        return new CellBroadcastMessage(subId, msg, deliveryTime, isRead);
+        // MTK-END
     }
 
     /**
@@ -251,7 +265,9 @@ public class CellBroadcastMessage implements Parcelable {
      * @return a new ContentValues object containing this object's data
      */
     public ContentValues getContentValues() {
-        ContentValues cv = new ContentValues(16);
+        // MTK-START
+        ContentValues cv = new ContentValues(17);
+        // MTK-END
         SmsCbMessage msg = mSmsCbMessage;
         cv.put(Telephony.CellBroadcasts.GEOGRAPHICAL_SCOPE, msg.getGeographicalScope());
         SmsCbLocation location = msg.getLocation();
@@ -287,6 +303,10 @@ public class CellBroadcastMessage implements Parcelable {
             cv.put(Telephony.CellBroadcasts.CMAS_URGENCY, cmasInfo.getUrgency());
             cv.put(Telephony.CellBroadcasts.CMAS_CERTAINTY, cmasInfo.getCertainty());
         }
+
+        // MTK-START
+        cv.put(Telephony.CellBroadcasts.SUBSCRIPTION_ID, mSubId);
+        // MTK-END
 
         return cv;
     }

@@ -38,7 +38,14 @@ public abstract class CatLog {
 
         Rlog.d("CAT", caller + ": " + msg);
     }
+    /**
+     * Function to classify error type of log message.
+     * @internal
+     */
     public static void e(Object caller, String msg) {
+        if (!DEBUG) {
+            return;
+        }
         String className = caller.getClass().getName();
         Rlog.e("CAT", className.substring(className.lastIndexOf('.') + 1) + ": "
                 + msg);

@@ -119,15 +119,67 @@ abstract class ValueParser {
 
             try {
                 int id = rawValue[valueIndex] & 0xff;
+                // textLen = checkItemString(rawValue, valueIndex + 1, textLen);
+                textLen = removeInvalidCharInItemTextString(rawValue, valueIndex, textLen);
                 String text = IccUtils.adnStringFieldToString(rawValue,
                         valueIndex + 1, textLen);
                 item = new Item(id, text);
             } catch (IndexOutOfBoundsException e) {
-                throw new ResultException(ResultCode.CMD_DATA_NOT_UNDERSTOOD);
+                //throw new ResultException(ResultCode.CMD_DATA_NOT_UNDERSTOOD);
+                CatLog.d("ValueParser", "retrieveItem fail");
             }
         }
 
         return item;
+    }
+
+    static int removeInvalidCharInItemTextString(byte[] rawValue, int valueIndex, int textLen)
+    {
+        Boolean isucs2 = false;
+        int len = textLen;
+        CatLog.d("ValueParser", "Try to remove invalid raw data 0xf0, valueIndex: " + valueIndex + ", textLen: " + textLen);
+        if (textLen >= 1 && rawValue[valueIndex + 1] == (byte) 0x80 ||
+            textLen >= 3 && rawValue[valueIndex + 1] == (byte) 0x81 ||
+            textLen >= 4 && rawValue[valueIndex + 1] == (byte) 0x82)
+        {
+            /* The text string format is UCS2 */
+            isucs2 = true;
+        }
+        CatLog.d("ValueParser", "Is the text string format UCS2? " + isucs2);
+        if (!isucs2 && textLen > 0)
+        {
+            /* Remove invalid char only when it is not UCS2 format */
+            for (int i = textLen; i > 0; i -= 1) {
+                if (rawValue[valueIndex + i] == (byte) 0xF0) {
+                    CatLog.d("ValueParser", "find invalid raw data 0xf0");
+                    len -= 1;
+                }
+                else
+                    break;
+            }
+        }
+        CatLog.d("ValueParser", "new textLen: " + len);
+        return len;
+    }
+
+    static int checkItemString(byte[] raw, int offset, int length) {
+        if ((raw[offset] & 0xff) != 0x80) {
+            // non-ucs2
+            CatLog.d("ValueParser", "don't do check for non-ucs2 raw data");
+            return length;
+        }
+
+        int len = length;
+        CatLog.d("ValueParser", "given length is " + length);
+        for (int i = raw.length - 1; i > offset; i -= 2) {
+            if ((raw[i] & 0xff) == 0 && (raw[i - 1] & 0xff) == 0) {
+                CatLog.d("ValueParser", "find invalid raw data 0x00");
+                len -= 2;
+            }
+        }
+
+        CatLog.d("ValueParser", "useful length is " + length);
+        return len;
     }
 
     /**
@@ -288,7 +340,7 @@ abstract class ValueParser {
                 }
             } else {
                 CatLog.d("ValueParser", "Alpha Id length=" + length);
-                return null;
+                return "";
             }
         } else {
             /* Per 3GPP specification 102.223,
@@ -354,117 +406,37 @@ abstract class ValueParser {
             throw new ResultException(ResultCode.CMD_DATA_NOT_UNDERSTOOD);
         }
     }
+    static byte[] retrieveNextActionIndicator(ComprehensionTlv ctlv) throws ResultException {
+        byte[] nai;
+
+        byte[] rawValue = ctlv.getRawValue();
+        int valueIndex = ctlv.getValueIndex();
+        int length = ctlv.getLength();
+
+        nai = new byte[length];
+        try {
+            for (int index = 0; index < length; ) {
+                nai[index++] = rawValue[valueIndex++];
+            }
+        } catch (IndexOutOfBoundsException e) {
+            throw new ResultException(ResultCode.CMD_DATA_NOT_UNDERSTOOD);
+        }
+
+        return nai;
+    }
+    // ICS Migration end
 
     static int retrieveTarget(ComprehensionTlv ctlv) throws ResultException {
-        ActivateDescriptor activateDesc = new ActivateDescriptor();
         byte[] rawValue = ctlv.getRawValue();
         int valueIndex = ctlv.getValueIndex();
-        try {
-            activateDesc.target = rawValue[valueIndex] & 0xff;
-            return activateDesc.target;
-        } catch (IndexOutOfBoundsException e) {
-            throw new ResultException(ResultCode.REQUIRED_VALUES_MISSING);
-        }
-    }
-
-    /**
-     * Samsung STK: Read SMSC Address
-     *
-     * @param ctlv A SMSC Address COMPREHENSION-TLV object
-     * @return A Java String object decoded from the SMSC Address object
-     * @throws ResultException
-     */
-    static String retrieveSMSCaddress(ComprehensionTlv ctlv)
-        throws ResultException {
-        byte[] rawValue = ctlv.getRawValue();
-        int valueIndex = ctlv.getValueIndex();
-        int length = ctlv.getLength();
-        byte[] outputValue = new byte[length + 1];
-
-        for (int k = 0; k <= length; k++) {
-            try {
-                outputValue[k] = rawValue[k + (valueIndex - 1)];
-            } catch (IndexOutOfBoundsException indexoutofboundsexception) {
-                throw new ResultException(ResultCode.CMD_DATA_NOT_UNDERSTOOD);
-            }
-        }
-        if (length != 0) {
-            return IccUtils.bytesToHexString(outputValue);
-        } else {
-            throw new ResultException(ResultCode.CMD_DATA_NOT_UNDERSTOOD);
-        }
-    }
-
-    /**
-     * Samsung STK: Read SMS TPDU Address
-     *
-     * @param ctlv A SMS TPDU COMPREHENSION-TLV object
-     * @return A Java String object decoded from the SMS TPDU object
-     * @throws ResultException
-     */
-    static String retrieveSMSTPDU(ComprehensionTlv ctlv)
-            throws ResultException {
-        byte[] rawValue = ctlv.getRawValue();
-        int valueIndex = ctlv.getValueIndex();
-        int pduLength = ctlv.getLength();
-        byte[] outputValue;
-        int k;
-        String result;
-        if (rawValue[valueIndex + 2] % 2 == 0) {
-            k = rawValue[valueIndex + 2] / 2;
-        } else {
-            k = (1 + rawValue[valueIndex + 2]) / 2;
-        }
-
-        if (pduLength == k + 6) {
-            outputValue = new byte[pduLength + 1];
-        } else {
-            outputValue = new byte[pduLength];
-        }
-
-        for (int l = 0; l < pduLength; l++) {
-            try {
-                outputValue[l] = rawValue[valueIndex + l];
-            } catch (IndexOutOfBoundsException ex) {
-                throw new ResultException(ResultCode.CMD_DATA_NOT_UNDERSTOOD);
-            }
-        }
-        if (pduLength != 0) {
-            result = IccUtils.bytesToHexString(outputValue);
-        } else {
-            throw new ResultException(ResultCode.CMD_DATA_NOT_UNDERSTOOD);
-        }
-
-        return result;
-    }
-
-    /**
-     * Samsung STK: Read USSD String
-     *
-     * @param ctlv A USSD String COMPREHENSION-TLV object
-     * @return A String object decoded from the USSD String object
-     * @throws ResultException
-     */
-    static String retrieveUSSDString(ComprehensionTlv ctlv) throws ResultException {
-        byte[] rawValue = ctlv.getRawValue();
-        int valueIndex = ctlv.getValueIndex();
-        int length = ctlv.getLength();
-
-        // If length is 0 (shouldn't be), return null
-        if (length == 0) {
-            return null;
-        }
-
-        // Should be 0x0f
-        if (rawValue[valueIndex] != 0x0f) {
-            throw new ResultException(ResultCode.CMD_DATA_NOT_UNDERSTOOD);
-        }
+        int target = 0;
 
         try {
-            return GsmAlphabet.gsm7BitPackedToString(rawValue,
-                    valueIndex + 1, ((length - 1) * 8) / 7);
+            target = rawValue[valueIndex] & 0xff;
         } catch (IndexOutOfBoundsException e) {
             throw new ResultException(ResultCode.CMD_DATA_NOT_UNDERSTOOD);
         }
+
+        return target;
     }
 }

@@ -80,4 +80,9 @@ public class TextMessage implements Parcelable {
             isHighPriority + " responseNeeded=" + responseNeeded + " userClear=" +
             userClear + " duration=" + duration;
     }
+
+    public static TextMessage getInstance() {
+        TextMessage self = new TextMessage();
+        return self;
+    }
 }

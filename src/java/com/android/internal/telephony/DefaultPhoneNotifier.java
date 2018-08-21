@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,7 +49,7 @@ import java.util.List;
  */
 public class DefaultPhoneNotifier implements PhoneNotifier {
     private static final String LOG_TAG = "DefaultPhoneNotifier";
-    private static final boolean DBG = false; // STOPSHIP if true
+    private static final boolean DBG = true; // STOPSHIP if true
 
     protected ITelephonyRegistry mRegistry;
 
@@ -57,6 +62,14 @@ public class DefaultPhoneNotifier implements PhoneNotifier {
     @Override
     public void notifyPhoneState(Phone sender) {
         Call ringingCall = sender.getRingingCall();
+        /// M: CC055: Notify Call state with phoneType @{
+        /* For ECC without SIM or SIP call, subId will be invalid as -1 */
+        /* We cannot obtain Phone object via invalid subId, thus adding phoneId info */
+        /* PhoneId of ECC via GsmPhone is in the range of 0 to phone count -1 */
+        /* PhoneId of SIP call is DEFAULT_PHONE_ID, which is Integer.MAX_VALUE */
+        int phoneId = sender.getPhoneId();
+        int phoneType = sender.getPhoneType();
+        /// @}
         int subId = sender.getSubId();
         String incomingNumber = "";
         if (ringingCall != null && ringingCall.getEarliestConnection() != null){
@@ -64,8 +77,14 @@ public class DefaultPhoneNotifier implements PhoneNotifier {
         }
         try {
             if (mRegistry != null) {
+                /// M: CC055: Notify Call state with phoneType @{
+                /*
                   mRegistry.notifyCallStateForSubscriber(subId,
                         convertCallState(sender.getState()), incomingNumber);
+                        */
+                mRegistry.notifyCallStateForPhoneInfo(phoneId, phoneType, subId,
+                      convertCallState(sender.getState()), incomingNumber);
+                /// @}
             }
         } catch (RemoteException ex) {
             // system process is dead
@@ -175,8 +194,28 @@ public class DefaultPhoneNotifier implements PhoneNotifier {
         ServiceState ss = sender.getServiceState();
         if (ss != null) roaming = ss.getDataRoaming();
 
+        //M: Get network type by sub when more than one SIM.
+        int networkType = ((telephony != null) ? telephony.getDataNetworkType(subId) :
+                    TelephonyManager.NETWORK_TYPE_UNKNOWN);
+
+        //M: For debug
+        if (DBG) {
+            log("doNotifyDataConnection " + "apnType=" + apnType + ",networkType="
+                + networkType + ", state=" + state);
+        }
+
         try {
             if (mRegistry != null) {
+                // M: reduce redundant notification
+                if (sender.getActiveApnHost(apnType) == null &&
+                    !(PhoneConstants.APN_TYPE_DEFAULT.equals(apnType)
+                        || PhoneConstants.APN_TYPE_EMERGENCY.equals(apnType))) {
+                    if (DBG) {
+                        log("ignore redundant notifyDataConnection");
+                    }
+                    return;
+                }
+
                 mRegistry.notifyDataConnectionForSubscriber(subId,
                     convertDataState(state),
                     sender.isDataConnectivityPossible(apnType), reason,
@@ -184,8 +223,7 @@ public class DefaultPhoneNotifier implements PhoneNotifier {
                     apnType,
                     linkProperties,
                     networkCapabilities,
-                    ((telephony!=null) ? telephony.getDataNetworkType(subId) :
-                    TelephonyManager.NETWORK_TYPE_UNKNOWN),
+                    networkType,
                     roaming);
             }
         } catch (RemoteException ex) {
@@ -307,6 +345,44 @@ public class DefaultPhoneNotifier implements PhoneNotifier {
             // system process is dead
         }
     }
+
+    // M: [LTE][Low Power][UL traffic shaping] Start
+    @Override
+    public void notifyLteAccessStratumChanged(Phone sender, String state) {
+        // FIXME: subId?
+        try {
+            if (mRegistry != null) {
+                mRegistry.notifyLteAccessStratumChanged(state);
+            }
+        } catch (RemoteException ex) {
+            // system process is dead
+        }
+    }
+
+    @Override
+    public void notifyPsNetworkTypeChanged(Phone sender, int nwType) {
+        // FIXME: subId?
+        try {
+            if (mRegistry != null) {
+                mRegistry.notifyPsNetworkTypeChanged(nwType);
+            }
+        } catch (RemoteException ex) {
+            // system process is dead
+        }
+    }
+
+    @Override
+    public void notifySharedDefaultApnStateChanged(Phone sender, boolean isSharedDefaultApn) {
+        // FIXME: subId?
+        try {
+            if (mRegistry != null) {
+                mRegistry.notifySharedDefaultApnStateChanged(isSharedDefaultApn);
+            }
+        } catch (RemoteException ex) {
+            // system process is dead
+        }
+    }
+    // M: [LTE][Low Power][UL traffic shaping] End
 
     /**
      * Convert the {@link PhoneConstants.State} enum into the TelephonyManager.CALL_STATE_*

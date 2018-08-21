@@ -20,6 +20,8 @@ import com.android.internal.telephony.EncodeException;
 import com.android.internal.telephony.GsmAlphabet;
 import java.util.Calendar;
 import java.util.TimeZone;
+import java.util.ArrayList;
+import java.util.Iterator;
 import android.os.SystemProperties;
 import android.text.TextUtils;
 
@@ -114,17 +116,22 @@ class GetInkeyInputResponseData extends ResponseData {
                 // ETSI TS 102 223 8.15, should use the same format as in SMS messages
                 // on the network.
                 if (mIsUcs2) {
+                    // data = mInData.getBytes("UTF-16");
                     // ucs2 is by definition big endian.
                     data = mInData.getBytes("UTF-16BE");
                 } else if (mIsPacked) {
+                    // int size = mInData.length();
+
+                    // byte[] tempData = GsmAlphabet
+                    // .stringToGsm7BitPacked(mInData);
                     byte[] tempData = GsmAlphabet
                             .stringToGsm7BitPacked(mInData, 0, 0);
-                    // The size of the new buffer will be smaller than the original buffer
-                    // since 7-bit GSM packed only requires ((mInData.length * 7) + 7) / 8 bytes.
-                    // And we don't need to copy/store the first byte from the returned array
-                    // because it is used to store the count of septets used.
-                    data = new byte[tempData.length - 1];
-                    System.arraycopy(tempData, 1, data, 0, tempData.length - 1);
+                    final int size = tempData.length - 1;
+                    data = new byte[size];
+                    // Since stringToGsm7BitPacked() set byte 0 in the
+                    // returned byte array to the count of septets used...
+                    // copy to a new array without byte 0.
+                    System.arraycopy(tempData, 1, data, 0, size);
                 } else {
                     data = GsmAlphabet.stringToGsm8BitPacked(mInData);
                 }
@@ -138,19 +145,7 @@ class GetInkeyInputResponseData extends ResponseData {
         }
 
         // length - one more for data coding scheme.
-
-        // ETSI TS 102 223 Annex C (normative): Structure of CAT communications
-        // Any length within the APDU limits (up to 255 bytes) can thus be encoded on two bytes.
-        // This coding is chosen to remain compatible with TS 101.220.
-        // Note that we need to reserve one more byte for coding scheme thus the maximum APDU
-        // size would be 254 bytes.
-        if (data.length + 1 <= 255) {
-            writeLength(buf, data.length + 1);
-        }
-        else {
-            data = new byte[0];
-        }
-
+        writeLength(buf, data.length + 1);
 
         // data coding scheme
         if (mIsUcs2) {
@@ -192,8 +187,7 @@ class LanguageResponseData extends ResponseData {
 
         if (mLang != null && mLang.length() > 0) {
             data = GsmAlphabet.stringToGsm8BitPacked(mLang);
-        }
-        else {
+        } else {
             data = new byte[0];
         }
 
@@ -292,4 +286,88 @@ class DTTZResponseData extends ResponseData {
     }
 
 }
+
+// Add by Huibin Mao Mtk80229
+// ICS Migration start
+class ProvideLocalInformationResponseData extends ResponseData {
+    // members
+    private int year;
+    private int month;
+    private int day;
+    private int hour;
+    private int minute;
+    private int second;
+    private int timezone;
+    private byte[] language;
+    private boolean mIsDate;
+    private boolean mIsLanguage;
+
+    private int mBatteryState;
+    private boolean mIsBatteryState;
+
+    public ProvideLocalInformationResponseData(int year, int month, int day,
+            int hour, int minute, int second, int timezone) {
+        super();
+        this.year = year;
+        this.month = month;
+        this.day = day;
+        this.hour = hour;
+        this.minute = minute;
+        this.second = second;
+        this.timezone = timezone;
+        this.mIsDate = true;
+        this.mIsLanguage = false;
+        this.mIsBatteryState = false;
+    }
+
+    public ProvideLocalInformationResponseData(byte[] language) {
+        super();
+        this.language = language;
+        this.mIsDate = false;
+        this.mIsLanguage = true;
+        this.mIsBatteryState = false;
+    }
+
+    public ProvideLocalInformationResponseData(int batteryState) {
+        super();
+        this.mBatteryState = batteryState;
+        this.mIsDate = false;
+        this.mIsLanguage = false;
+        this.mIsBatteryState = true;
+    }
+
+    @Override
+    public void format(ByteArrayOutputStream buf) {
+        if (mIsDate == true) {
+
+            int tag = 0x80 | ComprehensionTlvTag.DATE_TIME_AND_TIMEZONE.value();
+
+            buf.write(tag); // tag
+            buf.write(7); // length
+            buf.write(year);
+            buf.write(month);
+            buf.write(day);
+            buf.write(hour);
+            buf.write(minute);
+            buf.write(second);
+            buf.write(timezone);
+
+        } else if (mIsLanguage == true) {
+
+            int tag = 0x80 | ComprehensionTlvTag.LANGUAGE.value();
+
+            buf.write(tag); // tag
+            buf.write(2); // length
+            for (byte b : language) {
+                buf.write(b);
+            }
+        } else if (mIsBatteryState == true) {
+            int tag = 0x80 | ComprehensionTlvTag.BATTERY_STATE.value();
+            buf.write(tag); //tag
+            buf.write(0x01); //length
+            buf.write(mBatteryState); //battery state
+        }
+    }
+}
+// ICS Migration end
 

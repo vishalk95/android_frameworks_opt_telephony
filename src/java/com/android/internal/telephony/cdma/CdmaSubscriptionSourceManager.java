@@ -28,6 +28,7 @@ import android.os.RegistrantList;
 import android.provider.Settings;
 import android.telephony.Rlog;
 
+import java.util.HashMap;
 /**
  * Class that handles the CDMA subscription source changed events from RIL
  */
@@ -44,12 +45,19 @@ public class CdmaSubscriptionSourceManager extends Handler {
     public static final int SUBSCRIPTION_SOURCE_UNKNOWN = -1;
     public static final int SUBSCRIPTION_FROM_RUIM      = 0; /* CDMA subscription from RUIM */
     public static final int SUBSCRIPTION_FROM_NV        = 1; /* CDMA subscription from NV */
-    public static final int PREFERRED_CDMA_SUBSCRIPTION = SUBSCRIPTION_FROM_RUIM;
+    public static final int PREFERRED_CDMA_SUBSCRIPTION = SUBSCRIPTION_FROM_NV;
 
     private static CdmaSubscriptionSourceManager sInstance;
     private static final Object sReferenceCountMonitor = new Object();
-    private static int sReferenceCount = 0;
-
+    // MTK-START
+    // private static int sReferenceCount = 0;
+    private static final HashMap<Handler, CommandsInterface> sHandlerCis =
+            new HashMap<Handler, CommandsInterface>();
+    private static final HashMap<CommandsInterface, CdmaSubscriptionSourceManager> sCiInstances =
+            new HashMap<CommandsInterface, CdmaSubscriptionSourceManager>();
+    private static final HashMap<CommandsInterface, Integer> sCiReferenceCounts =
+            new HashMap<CommandsInterface, Integer>();
+    // MTK-END
     // ***** Instance Variables
     private CommandsInterface mCi;
     private Context mContext;
@@ -57,6 +65,10 @@ public class CdmaSubscriptionSourceManager extends Handler {
 
     // Type of CDMA subscription source
     private AtomicInteger mCdmaSubscriptionSource = new AtomicInteger(SUBSCRIPTION_FROM_NV);
+
+    // MTK-START
+    private int mActStatus = 0;
+    // MTK-END
 
     // Constructor
     private CdmaSubscriptionSourceManager(Context context, CommandsInterface ci) {
@@ -78,10 +90,27 @@ public class CdmaSubscriptionSourceManager extends Handler {
     public static CdmaSubscriptionSourceManager getInstance(Context context,
             CommandsInterface ci, Handler h, int what, Object obj) {
         synchronized (sReferenceCountMonitor) {
+            // MTK-START
+            sInstance = sCiInstances.get(ci);
+            // MTK-END
             if (null == sInstance) {
                 sInstance = new CdmaSubscriptionSourceManager(context, ci);
+                // MTK-START
+                sCiInstances.put(ci, sInstance);
+                // MTK-END
             }
-            CdmaSubscriptionSourceManager.sReferenceCount++;
+            // MTK-START
+            // CdmaSubscriptionSourceManager.sReferenceCount++;
+            sHandlerCis.put(h, ci);
+            int referenceCount;
+            if (sCiReferenceCounts.get(ci) == null) {
+                referenceCount = 0;
+            } else {
+                referenceCount = sCiReferenceCounts.get(ci);
+            }
+            referenceCount++;
+            sCiReferenceCounts.put(ci, referenceCount);
+            // MTK-END
         }
         sInstance.registerForCdmaSubscriptionSourceChanged(h, what, obj);
         return sInstance;
@@ -93,12 +122,30 @@ public class CdmaSubscriptionSourceManager extends Handler {
     public void dispose(Handler h) {
         mCdmaSubscriptionSourceChangedRegistrants.remove(h);
         synchronized (sReferenceCountMonitor) {
-            sReferenceCount--;
-            if (sReferenceCount <= 0) {
+            // MTK-START
+            CommandsInterface mCi = sHandlerCis.get(h);
+            if (mCi == null) {
+                log("The handler doesn't create CdmaSSM, return !");
+                return;
+            }
+            int referenceCount = sCiReferenceCounts.get(mCi);
+            //sReferenceCount--;
+            referenceCount--;
+            sCiReferenceCounts.put(mCi, referenceCount);
+            sHandlerCis.remove(h);
+            log("dispose ci = " + ((null != mCi) ? mCi.hashCode() : null) +
+                    "  referenceCount = " + referenceCount);
+            if (referenceCount <= 0) {
+            // MTK-END
                 mCi.unregisterForCdmaSubscriptionChanged(this);
                 mCi.unregisterForOn(this);
                 mCi.unregisterForSubscriptionStatusChanged(this);
-                sInstance = null;
+                // MTK-START
+                mActStatus = 0;
+                //sInstance = null;
+                sCiInstances.remove(mCi);
+                sCiReferenceCounts.remove(mCi);
+                // MTK-END
             }
         }
     }
@@ -129,6 +176,9 @@ public class CdmaSubscriptionSourceManager extends Handler {
                 if (ar.exception == null) {
                     int actStatus = ((int[])ar.result)[0];
                     log("actStatus = " + actStatus);
+                    // MTK-START
+                    mActStatus = actStatus;
+                    // MTK-END
                     if (actStatus == SUBSCRIPTION_ACTIVATED) { // Subscription Activated
                         // In case of multi-SIM, framework should wait for the subscription ready
                         // to send any request to RIL.  Otherwise it will return failure.
@@ -214,4 +264,8 @@ public class CdmaSubscriptionSourceManager extends Handler {
         Rlog.w(LOG_TAG, s);
     }
 
+    public int getActStatus() {
+        log("getActStatus " + mActStatus);
+        return mActStatus;
+    }
 }

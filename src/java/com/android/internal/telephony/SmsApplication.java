@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2013 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,7 +43,6 @@ import android.provider.Telephony.Sms.Intents;
 import android.telephony.Rlog;
 import android.telephony.SmsManager;
 import android.telephony.TelephonyManager;
-import android.text.TextUtils;
 import android.util.Log;
 
 import com.android.internal.content.PackageMonitor;
@@ -46,6 +50,11 @@ import com.android.internal.content.PackageMonitor;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
+
+// MTK-START
+// Open permission for special app to write sms DB
+import com.mediatek.sms.SmsDbVisitor;
+// MTK-END
 
 /**
  * Class for managing the primary application that we will deliver SMS/MMS messages to
@@ -58,7 +67,6 @@ public final class SmsApplication {
     private static final String BLUETOOTH_PACKAGE_NAME = "com.android.bluetooth";
     private static final String MMS_SERVICE_PACKAGE_NAME = "com.android.mms.service";
     private static final String TELEPHONY_PROVIDER_PACKAGE_NAME = "com.android.providers.telephony";
-    private static final String DEFAULT_SYSTEM_MMS_PACKAGE_NAME = "com.android.messaging";
 
     private static final String SCHEME_SMS = "sms";
     private static final String SCHEME_SMSTO = "smsto";
@@ -395,6 +403,18 @@ public final class SmsApplication {
                         MMS_SERVICE_PACKAGE_NAME);
                 assignWriteSmsPermissionToSystemApp(context, packageManager, appOps,
                         TELEPHONY_PROVIDER_PACKAGE_NAME);
+
+                // MTK-START
+                // Verify that the MTK special internal apps have permissions
+                // Get the db special visitor plug-in class
+                String[] specialApps = SmsDbVisitor.getPackageNames();
+                if (specialApps != null) {
+                    for (int i = 0 ; i < specialApps.length ; i++) {
+                        assignWriteSmsPermissionToSystemApp(context, packageManager, appOps,
+                                specialApps[i]);
+                    }
+                }
+                // MTK-END
             }
         }
         if (DEBUG_MULTIUSER) {
@@ -474,6 +494,18 @@ public final class SmsApplication {
                     MMS_SERVICE_PACKAGE_NAME);
             assignWriteSmsPermissionToSystemApp(context, packageManager, appOps,
                     TELEPHONY_PROVIDER_PACKAGE_NAME);
+
+            // MTK-START
+            // Verify that the MTK special internal apps have permissions
+            // Get the db special visitor plug-in class
+            String[] specialApps = SmsDbVisitor.getPackageNames();
+            if (specialApps != null) {
+                for (int i = 0 ; i < specialApps.length ; i++) {
+                    assignWriteSmsPermissionToSystemApp(context, packageManager, appOps,
+                            specialApps[i]);
+                }
+            }
+            // MTK-END
         }
     }
 
@@ -736,17 +768,20 @@ public final class SmsApplication {
                 || BLUETOOTH_PACKAGE_NAME.equals(packageName)) {
             return true;
         }
-        return false;
-    }
 
-    /**
-     * @hide
-     */
-    public static boolean canSmsAppHandleAlwaysAsk(Context context) {
-        final ComponentName defaultMmsApplication = SmsApplication.getDefaultMmsApplication(context,
-                false);
-        return TextUtils.equals(DEFAULT_SYSTEM_MMS_PACKAGE_NAME,
-                defaultMmsApplication.getPackageName());
+        // MTK-START
+        // Check the db special visitor plug-in class
+        String[] specialApps = SmsDbVisitor.getPackageNames();
+        if (specialApps != null) {
+            for (int i = 0 ; i < specialApps.length ; i++) {
+                if (packageName.equals(specialApps[i])) {
+                    return true;
+                }
+            }
+        }
+        // MTK-END
+
+        return false;
     }
 
     private static String getDefaultSmsApplicationPackageName(Context context) {

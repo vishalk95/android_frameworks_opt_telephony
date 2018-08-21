@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,7 +22,6 @@
 package com.android.internal.telephony;
 
 import android.net.Uri;
-import android.os.Bundle;
 import android.os.SystemClock;
 import android.telecom.ConferenceParticipant;
 import android.telephony.Rlog;
@@ -38,24 +42,14 @@ public abstract class Connection {
         void onPostDialChar(char c);
     }
 
-   /**
-     * Capabilities that will be mapped to telecom connection
-     * capabilities.
-     */
-    public static class Capability {
-        public static final int SUPPORTS_DOWNGRADE_TO_VOICE_LOCAL = 0x00000001;
-        public static final int SUPPORTS_DOWNGRADE_TO_VOICE_REMOTE = 0x00000002;
-        public static final int SUPPORTS_VT_LOCAL_BIDIRECTIONAL = 0x00000004;
-        public static final int SUPPORTS_VT_REMOTE_BIDIRECTIONAL = 0x00000008;
-    }
-
     /**
      * Listener interface for events related to the connection which should be reported to the
      * {@link android.telecom.Connection}.
      */
     public interface Listener {
         public void onVideoStateChanged(int videoState);
-        public void onConnectionCapabilitiesChanged(int capability);
+        public void onLocalVideoCapabilityChanged(boolean capable);
+        public void onRemoteVideoCapabilityChanged(boolean capable);
         public void onWifiChanged(boolean isWifi);
         public void onVideoProviderChanged(
                 android.telecom.Connection.VideoProvider videoProvider);
@@ -64,7 +58,30 @@ public abstract class Connection {
         public void onCallSubstateChanged(int callSubstate);
         public void onMultipartyStateChanged(boolean isMultiParty);
         public void onConferenceMergedFailed();
-        public void onExtrasChanged(Bundle extras);
+        /// M: For VoLTE conference. @{
+        /**
+         * For VoLTE enhanced conference call, notify invite conf. participants completed.
+         * @param isSuccess is success or not.
+         * @hide
+         */
+        public void onConferenceParticipantsInvited(boolean isSuccess);
+
+        /**
+         * For VoLTE conference SRVCC, notify the new participant connections in GsmPhone.
+         * @param radioConnections the participant connections in GsmPhone
+         * @hide
+         */
+        public void onConferenceConnectionsConfigured(ArrayList<Connection> radioConnections);
+        /// @}
+
+        /// M: ALPS02256671. For PAU information changed. @{
+        /**
+         * For VoLTE PAU update.
+         * @param pau P-Asserted-Identity URI.
+         * @hide
+         */
+        public void onPauInfoUpdated(String pau);
+        /// @}
     }
 
     /**
@@ -74,7 +91,9 @@ public abstract class Connection {
         @Override
         public void onVideoStateChanged(int videoState) {}
         @Override
-        public void onConnectionCapabilitiesChanged(int capability) {}
+        public void onLocalVideoCapabilityChanged(boolean capable) {}
+        @Override
+        public void onRemoteVideoCapabilityChanged(boolean capable) {}
         @Override
         public void onWifiChanged(boolean isWifi) {}
         @Override
@@ -90,8 +109,21 @@ public abstract class Connection {
         public void onMultipartyStateChanged(boolean isMultiParty) {}
         @Override
         public void onConferenceMergedFailed() {}
+        /// M: For VoLTE conference. @{
+
+        // for enhanced conference call
         @Override
-        public void onExtrasChanged(Bundle extras) {}
+        public void onConferenceParticipantsInvited(boolean isSuccess) {}
+
+        // for conference SRVCC.
+        @Override
+        public void onConferenceConnectionsConfigured(ArrayList<Connection> radioConnections) {}
+        /// @}
+
+        /// M: ALPS02256671. For PAU information changed. @{
+        @Override
+        public void onPauInfoUpdated(String pau) {}
+        /// @}
     }
 
     public static final int AUDIO_QUALITY_STANDARD = 1;
@@ -130,13 +162,31 @@ public abstract class Connection {
 
     Object mUserData;
     private int mVideoState;
-    private int mConnectionCapabilities;
+    private boolean mLocalVideoCapable;
+    private boolean mRemoteVideoCapable;
     private boolean mIsWifi;
     private int mAudioQuality;
     private int mCallSubstate;
     private android.telecom.Connection.VideoProvider mVideoProvider;
     public Call.State mPreHandoverState = Call.State.IDLE;
-    private Bundle mExtras;
+
+    /// M: for Ims Conference SRVCC. @{
+    public boolean mPreMultipartyState = false;
+    public boolean mPreMultipartyHostState = false;
+    /// @}
+
+    /// M: CC018: Redirecting number via COLP @{
+    String mRedirectingAddress;
+    /// @}
+    /// M: CC017: Forwarding number via EAIC @{
+    String mForwardingAddress;
+    /// @}
+
+    /// M: ALPS02256671. For PAU information changed.
+    protected String mPau;
+
+    /// M: ALPS02614972. For DTMF.
+    protected String mPostDialString;      // outgoing calls only
 
     /* Instance Methods */
 
@@ -151,6 +201,12 @@ public abstract class Connection {
         return mAddress;
     }
 
+    /// M: CC016: number presentation via CLIP @{
+    public void setNumberPresentation(int num) {
+        mNumberPresentation = num;
+    }
+    /// @}
+
     /**
      * Gets CNAP name associated with connection.
      * @return cnap name or null if unavailable
@@ -158,6 +214,15 @@ public abstract class Connection {
     public String getCnapName() {
         return mCnapName;
     }
+
+    /// M: CC010: Add RIL interface @{
+    //obsolete
+    /*
+    public void setCnapName(String cnapName) {
+        this.mCnapName = cnapName;
+    }
+    */
+    /// @}
 
     /**
      * Get original dial string.
@@ -310,7 +375,23 @@ public abstract class Connection {
      */
     public Call.State getStateBeforeHandover() {
         return mPreHandoverState;
-   }
+    }
+
+    /// M: for Ims Conference SRVCC. @{
+    /**
+     * If this connection went through handover return the isMultiparty state
+     *  of the call that contained this connection before handover.
+     * @return boolean is multiparty or not.
+     * @hide
+     */
+    public boolean isMultipartyBeforeHandover() {
+        return mPreMultipartyState;
+    }
+
+    public boolean isConfHostBeforeHandover() {
+        return mPreMultipartyHostState;
+    }
+    /// @}
 
     /**
      * Get the details of conference participants. Expected to be
@@ -483,12 +564,19 @@ public abstract class Connection {
     public void migrateFrom(Connection c) {
         if (c == null) return;
         mListeners = c.mListeners;
+        mAddress = c.getAddress();
+        mNumberPresentation = c.getNumberPresentation();
         mDialString = c.getOrigDialString();
+        mCnapName = c.getCnapName();
+        mCnapNamePresentation = c.getCnapNamePresentation();
+        mIsIncoming = c.isIncoming();
         mCreateTime = c.getCreateTime();
         mConnectTime = c.getConnectTime();
         mConnectTimeReal = c.getConnectTimeReal();
         mHoldingStartTime = c.getHoldingStartTime();
         mOrigConnection = c.getOrigConnection();
+        /// M: ALPS02614972, keep the DTMF for SRVCC.
+        mPostDialString = c.mPostDialString;
     }
 
     /**
@@ -519,33 +607,21 @@ public abstract class Connection {
     }
 
     /**
-     * Called to get Connection capabilities.Returns Capabilities bitmask.
-     * @See Connection.Capability.
+     * Returns the local video capability state for the connection.
+     *
+     * @return {@code True} if the connection has local video capabilities.
      */
-    public int getConnectionCapabilities() {
-        return mConnectionCapabilities;
+    public boolean isLocalVideoCapable() {
+        return mLocalVideoCapable;
     }
 
     /**
-     * Applies a capability to a capabilities bit-mask.
+     * Returns the remote video capability state for the connection.
      *
-     * @param capabilities The capabilities bit-mask.
-     * @param capability The capability to apply.
-     * @return The capabilities bit-mask with the capability applied.
+     * @return {@code True} if the connection has remote video capabilities.
      */
-    public static int addCapability(int capabilities, int capability) {
-        return capabilities | capability;
-    }
-
-    /**
-     * Removes a capability to a capabilities bit-mask.
-     *
-     * @param capabilities The capabilities bit-mask.
-     * @param capability The capability to remove.
-     * @return The capabilities bit-mask with the capability removed.
-     */
-    public static int removeCapability(int capabilities, int capability) {
-        return capabilities & ~capability;
+    public boolean isRemoteVideoCapable() {
+        return mRemoteVideoCapable;
     }
 
     /**
@@ -600,17 +676,26 @@ public abstract class Connection {
     }
 
     /**
-     * Called to set Connection capabilities.This will take Capabilities bitmask
-     * as input which is converted from Capabilities constants.
-     * @See Connection.Capability.
-     * @param capability The Capabilities bitmask.
+     * Sets whether video capability is present locally.
+     *
+     * @param capable {@code True} if video capable.
      */
-    public void setConnectionCapabilities(int capability) {
-        if(mConnectionCapabilities != capability) {
-            mConnectionCapabilities = capability;
-            for (Listener l : mListeners) {
-                l.onConnectionCapabilitiesChanged(mConnectionCapabilities);
-            }
+    public void setLocalVideoCapable(boolean capable) {
+        mLocalVideoCapable = capable;
+        for (Listener l : mListeners) {
+            l.onLocalVideoCapabilityChanged(mLocalVideoCapable);
+        }
+    }
+
+    /**
+     * Sets whether video capability is present remotely.
+     *
+     * @param capable {@code True} if video capable.
+     */
+    public void setRemoteVideoCapable(boolean capable) {
+        mRemoteVideoCapable = capable;
+        for (Listener l : mListeners) {
+            l.onRemoteVideoCapabilityChanged(mRemoteVideoCapable);
         }
     }
 
@@ -636,25 +721,6 @@ public abstract class Connection {
         for (Listener l : mListeners) {
             l.onAudioQualityChanged(mAudioQuality);
         }
-    }
-
-    /**
-     * Notifies listeners that connection extras has changed.
-     * @param extras New connection extras.
-     */
-    public void setConnectionExtras(Bundle extras) {
-        mExtras = extras;
-        for (Listener l : mListeners) {
-            l.onExtrasChanged(extras);
-        }
-    }
-
-    /**
-     * Retrieves the current connection extras.
-     * @return the connection extras.
-     */
-    public Bundle getConnectionExtras() {
-        return mExtras;
     }
 
     /**
@@ -729,6 +795,43 @@ public abstract class Connection {
     public void onDisconnectConferenceParticipant(Uri endpoint) {
     }
 
+    /// M: For VoLTE conference. @{
+    /**
+     * Notify when the task of onInviteConferenceParticipants() is completed.
+     * @param isSuccess is success or not.
+     * @hide
+     */
+    public void notifyConferenceParticipantsInvited(boolean isSuccess) {
+        for (Listener l : mListeners) {
+            l.onConferenceParticipantsInvited(isSuccess);
+        }
+    }
+
+    /**
+     * Notify when the new participant connections in GsmPhone are maded.
+     * @param radioConnections new participant connections in GsmPhone
+     * @hide
+     */
+    public void notifyConferenceConnectionsConfigured(ArrayList<Connection> radioConnections) {
+        for (Listener l : mListeners) {
+            l.onConferenceConnectionsConfigured(radioConnections);
+        }
+    }
+    /// @}
+
+    /// M: ALPS02256671. For PAU information changed. @{
+    /**
+     * Notify when PAU information is updated.
+     * @param pau P-Asserted-Identity URI.
+     * @hide
+     */
+    public void notifyPauInfoUpdated(String pau) {
+        for (Listener l : mListeners) {
+            l.onPauInfoUpdated(pau);
+        }
+    }
+    /// @}
+
     /**
      * Build a human representation of a connection instance, suitable for debugging.
      * Don't log personal stuff unless in debug mode.
@@ -750,4 +853,65 @@ public abstract class Connection {
                 .append(" post dial state: " + getPostDialState());
         return str.toString();
     }
+
+    /// M: CC018: Redirecting number via COLP @{
+    /**
+     * Gets redirecting address (e.g. phone number) associated with connection.
+     *
+     * @return address or null if unavailable
+    */
+    public String getRedirectingAddress() {
+       return mRedirectingAddress;
+    }
+
+    /**
+     * Sets redirecting address (e.g. phone number) associated with connection.
+     *
+    */
+    public void setRedirectingAddress(String address) {
+        mRedirectingAddress = address;
+    }
+    /// @}
+
+    /// M: CC017: Forwarding number via EAIC @{
+    /**
+     * Gets forwarding address (e.g. phone number) associated with connection.
+     * A makes call to B and B redirects(Forwards) this call to C, the forwarding address is B.
+     * @return address or null if unavailable
+    */
+    public String getForwardingAddress() {
+       return mForwardingAddress;
+    }
+
+    /**
+     * Sets forwarding address (e.g. phone number) associated with connection.
+     * A makes call to B and B redirects(Forwards) this call to C, the forwarding address is B.
+    */
+    public void setForwardingAddress(String address) {
+       mForwardingAddress = address;
+    }
+    /// @}
+
+    /// M: For 3G VT only @{
+    /**
+     * Returns true of this connection is a vt call.
+     * @hide
+     */
+    public boolean isVideo() {
+        Rlog.d(LOG_TAG, "Connection: isVideo = false");
+        return false;
+    }
+    /// @}
+
+    /// M: For one-key conference MT displayed as incoming conference call. @{
+    /**
+     * Returns whether the original ImsPhoneConnection was a member
+     * of a conference incoming call.
+     * @return true if ImsPhoneConnection is a conference incoming call.
+     * @hide
+     */
+    public boolean isIncomingCallMultiparty() {
+        return false;
+    }
+    /// @}
 }

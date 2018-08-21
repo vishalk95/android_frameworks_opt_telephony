@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,7 +50,6 @@ public interface IccConstants {
     static final int EF_SST = 0x6f38;
     static final int EF_CFIS = 0x6FCB;
     static final int EF_IMG = 0x4f20;
-    static final int EF_PLMN_SEL = 0x6F30;
 
     // USIM SIM file ids from TS 131.102
     public static final int EF_PBR = 0x4F30;
@@ -73,10 +77,6 @@ public interface IccConstants {
     static final int EF_CSIM_IMSIM = 0x6F22;
     static final int EF_CSIM_CDMAHOME = 0x6F28;
     static final int EF_CSIM_EPRL = 0x6F5A;
-    static final int EF_CSIM_PRL = 0x6F30;
-    // C.S0074-Av1.0 Section 4
-    static final int EF_CSIM_MLPL = 0x4F20;
-    static final int EF_CSIM_MSPL = 0x4F21;
     static final int EF_CSIM_MIPUPP = 0x6F4D;
 
     //ISIM access
@@ -86,11 +86,6 @@ public interface IccConstants {
     static final int EF_IST = 0x6f07;
     static final int EF_PCSCF = 0x6f09;
     static final int EF_PSI = 0x6fe5;
-
-    //plmnwact
-    static final int EF_PLMNWACT = 0x6F60;
-    //hplmnwact
-    static final int EF_HPLMNWACT = 0x6F62;
 
     // SMS record length from TS 51.011 10.5.3
     static public final int SMS_RECORD_LENGTH = 176;
@@ -103,8 +98,38 @@ public interface IccConstants {
     static final String DF_GRAPHICS = "5F50";
     static final String DF_GSM = "7F20";
     static final String DF_CDMA = "7F25";
-    static final String DF_MMSS = "5F3C";
 
     //UICC access
     static final String DF_ADF = "7FFF";
+
+    // MTK-START
+    static final int EF_ECC = 0x6FB7;
+    static final int EF_CDMA_ECC = 0x6F47;
+    // USIM SIM file ids from TS 31.102
+    static final int EF_PSISMSC = 0x6FE5;
+    static final int EF_GBABP = 0x6fD6;
+    // [ALPS01206315] Support EF_SMSP (EF ids from 11.11/31.102)
+    static final int EF_SMSP = 0x6F42;
+    static final int EF_ELP = 0x2F05;
+    // ALPS00302702 RAT balancing
+    static public final int EF_RAT = 0x4F36; // ADF(USIM)/7F66/5F30/4F36
+    static final String DF_USIM = "7FFF";
+
+    // MTK-START [ALPS00092673] Orange feature merge back added by mtk80589 in 2011.11.15
+    /*
+      Detail description:
+      This feature provides a interface to get menu title string from EF_SUME
+    */
+    // SET UP MENU ELEMENTS
+    static final int EF_SUME = 0x6F54;
+    // MTK-END [ALPS00092673] Orange feature merge back added by mtk80589 in 2011.11.15
+
+    //ISIM access file ids from TS 31.103
+    static final int EF_ISIM_GBABP = 0x6fd5;
+    static final int EF_ISIM_GBANL = 0x6fd7;
+    // MTK-END
+
+    ///M: FDN@{
+    static final int EF_EST = 0x6f75;//C.S0065 Enabled Service Table EF ID
+    ///M: FDN @}
 }
