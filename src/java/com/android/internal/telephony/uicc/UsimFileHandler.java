@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006, 2012 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,43 +53,50 @@ public final class UsimFileHandler extends IccFileHandler implements IccConstant
         case EF_SPDI:
         case EF_SST:
         case EF_CFIS:
+            // MTK-START
+            return MF_SIM + DF_ADF;
+            // MTK-END
         case EF_MAILBOX_CPHS:
         case EF_VOICE_MAIL_INDICATOR_CPHS:
         case EF_CFF_CPHS:
         case EF_SPN_CPHS:
         case EF_SPN_SHORT_CPHS:
+        // MTK-START
+        // CPHS is SIM card's enhancement but not USIM card, so we should return DF_GSM.
+        //case EF_FDN:
+        //case EF_MSISDN:
+        //case EF_EXT2:
+        case EF_INFO_CPHS:
+        case EF_CSP_CPHS:
+            return MF_SIM + DF_GSM;
         case EF_FDN:
         case EF_MSISDN:
         case EF_EXT2:
-        case EF_INFO_CPHS:
-        case EF_CSP_CPHS:
+        // MTK-END
         case EF_GID1:
         case EF_GID2:
         case EF_LI:
-        case EF_PLMNWACT:
-        case EF_HPLMNWACT:
+        // MTK-START
+        case EF_SMSP:   // [ALPS01206315] Support EF_SMSP
+        case EF_SDN:
+        case EF_ECC:
+        // MTK-END
             return MF_SIM + DF_ADF;
-        /* Support for reading user & operator PLMN list from SIM */
-        /* 3GPP TS 11.11. File read : EFPLMNsel) */
-        case EF_PLMN_SEL:
-            return MF_SIM + DF_GSM;
+        // MTK-START
+        case EF_PSISMSC:
+            return MF_SIM + DF_TELECOM;
+        // MTK-END
+
         case EF_PBR:
-            if (mUseLocalPb) {
-                return MF_SIM + DF_ADF + DF_PHONEBOOK;
-            } else {
-                return MF_SIM + DF_TELECOM + DF_PHONEBOOK;
-            }
+            // we only support global phonebook.
+            return MF_SIM + DF_TELECOM + DF_PHONEBOOK;
         }
         String path = getCommonIccEFPath(efid);
         if (path == null) {
             // The EFids in USIM phone book entries are decided by the card manufacturer.
             // So if we don't match any of the cases above and if its a USIM return
             // the phone book path.
-            if (mUseLocalPb) {
-                return MF_SIM + DF_ADF + DF_PHONEBOOK;
-            } else {
-                return MF_SIM + DF_TELECOM + DF_PHONEBOOK;
-            }
+            return MF_SIM + DF_TELECOM + DF_PHONEBOOK;
         }
         return path;
     }

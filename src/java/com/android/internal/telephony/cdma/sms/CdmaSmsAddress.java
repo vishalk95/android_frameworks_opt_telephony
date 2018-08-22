@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2008 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -196,42 +201,33 @@ public class CdmaSmsAddress extends SmsAddress {
     public static CdmaSmsAddress parse(String address) {
         CdmaSmsAddress addr = new CdmaSmsAddress();
         addr.address = address;
-        addr.digitMode = DIGIT_MODE_4BIT_DTMF; // Default to 4 bit dtmf encoding
-        addr.ton = TON_UNKNOWN;
-        addr.numberMode = NUMBER_MODE_NOT_DATA_NETWORK;
-        addr.numberPlan = NUMBERING_PLAN_UNKNOWN;
+        addr.ton = CdmaSmsAddress.TON_UNKNOWN;
         byte[] origBytes = null;
-
-        if (address.indexOf('+') != -1) {
-            // This is international phone number
-            addr.digitMode = DIGIT_MODE_8BIT_CHAR;
-            addr.ton = TON_INTERNATIONAL_OR_IP;
-            addr.numberMode = NUMBER_MODE_NOT_DATA_NETWORK;
-            addr.numberPlan = NUMBERING_PLAN_ISDN_TELEPHONY;
-        }
-        if (address.indexOf('@') != -1) {
-            // This is email address
-            addr.digitMode = DIGIT_MODE_8BIT_CHAR;
-            addr.ton = TON_NATIONAL_OR_EMAIL;
-            addr.numberMode = NUMBER_MODE_DATA_NETWORK;
-        }
-
-        // A.S0014-C 4.2.40 states: "Prefix or escape digits shall not be included"
         String filteredAddr = filterNumericSugar(address);
-        if (addr.digitMode == DIGIT_MODE_4BIT_DTMF) {
-            if (filteredAddr != null) {
-                origBytes = parseToDtmf(filteredAddr);
-            }
-            if (origBytes == null) {
-                // Failed to encode in 4 bit. Try in 8 bit.
-                addr.digitMode = DIGIT_MODE_8BIT_CHAR;
-            }
+        if (filteredAddr != null) {
+            origBytes = parseToDtmf(filteredAddr);
         }
-
-        if (addr.digitMode == DIGIT_MODE_8BIT_CHAR) {
-            filteredAddr = filterWhitespace(filteredAddr);
+        if (origBytes != null) {
+            addr.digitMode = DIGIT_MODE_4BIT_DTMF;
+            addr.numberMode = NUMBER_MODE_NOT_DATA_NETWORK;
+            if (address.indexOf('+') != -1) {
+                addr.ton = TON_INTERNATIONAL_OR_IP;
+            }
+        } else {
+            filteredAddr = filterWhitespace(address);
             origBytes = UserData.stringToAscii(filteredAddr);
             if (origBytes == null) {
+                return null;
+            }
+            addr.digitMode = DIGIT_MODE_8BIT_CHAR;
+            addr.numberMode = NUMBER_MODE_DATA_NETWORK;
+            if (address.indexOf('@') != -1) {
+                addr.ton = TON_NATIONAL_OR_EMAIL;
+            } else {
+                /*
+                 * SMS dont support the address like "abcd", it is not an email adress.
+                 * Add by VIA
+                 */
                 return null;
             }
         }

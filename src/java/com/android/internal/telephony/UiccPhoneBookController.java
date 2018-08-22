@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2008 The Android Open Source Project
  * Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
  * Not a Contribution.
@@ -18,7 +23,6 @@
 
 package com.android.internal.telephony;
 
-import android.content.ContentValues;
 import android.os.ServiceManager;
 import android.os.RemoteException;
 import android.telephony.Rlog;
@@ -27,6 +31,10 @@ import com.android.internal.telephony.IccPhoneBookInterfaceManagerProxy;
 import com.android.internal.telephony.IIccPhoneBook;
 import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.uicc.AdnRecord;
+
+import com.mediatek.internal.telephony.uicc.AlphaTag;
+import com.mediatek.internal.telephony.uicc.UsimGroup;
+import com.mediatek.internal.telephony.uicc.UsimPBMemInfo;
 
 import java.lang.ArrayIndexOutOfBoundsException;
 import java.lang.NullPointerException;
@@ -69,6 +77,39 @@ public class UiccPhoneBookController extends IIccPhoneBook.Stub {
         }
     }
 
+    public int
+    updateAdnRecordsInEfBySearchWithError(int subId, int efid,
+            String oldTag, String oldPhoneNumber,
+            String newTag, String newPhoneNumber, String pin2) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.updateAdnRecordsInEfBySearchWithError(efid,
+                    oldTag, oldPhoneNumber, newTag, newPhoneNumber, pin2);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return 0;
+        }
+    }
+
+    public int
+    updateUsimPBRecordsInEfBySearchWithError(int subId, int efid,
+            String oldTag, String oldPhoneNumber, String oldAnr, String oldGrpIds, String[] oldEmails,
+            String newTag, String newPhoneNumber, String newAnr, String newGrpIds, String[] newEmails) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.updateUsimPBRecordsInEfBySearchWithError(
+                    efid, oldTag, oldPhoneNumber, oldAnr, oldGrpIds, oldEmails,
+                    newTag, newPhoneNumber, newAnr, newGrpIds, newEmails);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return 0;
+        }
+    }
+
     @Override
     public boolean
     updateAdnRecordsInEfByIndex(int efid, String newTag,
@@ -90,6 +131,62 @@ public class UiccPhoneBookController extends IIccPhoneBook.Stub {
             Rlog.e(TAG,"updateAdnRecordsInEfByIndex iccPbkIntMgrProxy is" +
                       " null for Subscription:"+subId);
             return false;
+        }
+    }
+
+    public int
+    updateAdnRecordsInEfByIndexWithError(int subId, int efid, String newTag,
+            String newPhoneNumber, int index, String pin2) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.updateAdnRecordsInEfByIndexWithError(efid,
+                    newTag, newPhoneNumber, index, pin2);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return 0;
+        }
+    }
+
+    public int
+    updateUsimPBRecordsInEfByIndexWithError(int subId, int efid, String newTag,
+            String newPhoneNumber, String newAnr,  String newGrpIds, String[] newEmails, int index) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.updateUsimPBRecordsInEfByIndexWithError(efid,
+                    newTag, newPhoneNumber, newAnr, newGrpIds, newEmails, index);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return 0;
+        }
+    }
+
+    public int updateUsimPBRecordsByIndexWithError(int subId, int efid, AdnRecord record, int index) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.updateUsimPBRecordsByIndexWithError(efid,
+                    record, index);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return 0;
+        }
+    }
+
+    public int updateUsimPBRecordsBySearchWithError(int subId, int efid, AdnRecord oldAdn, AdnRecord newAdn) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.updateUsimPBRecordsBySearchWithError(efid,
+                    oldAdn, newAdn);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return 0;
         }
     }
 
@@ -131,107 +228,316 @@ public class UiccPhoneBookController extends IIccPhoneBook.Stub {
         }
     }
 
-    public boolean
-    updateAdnRecordsWithContentValuesInEfBySearch(int efid, ContentValues values,
-        String pin2) throws android.os.RemoteException {
-            return updateAdnRecordsWithContentValuesInEfBySearchUsingSubId(
-                getDefaultSubscription(), efid, values, pin2);
-    }
-
-    public boolean
-    updateAdnRecordsWithContentValuesInEfBySearchUsingSubId(int subId, int efid,
-        ContentValues values, String pin2)
-        throws android.os.RemoteException {
-
+    public boolean isPhbReady(int subId) throws android.os.RemoteException {
         IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
                              getIccPhoneBookInterfaceManagerProxy(subId);
         if (iccPbkIntMgrProxy != null) {
-            return iccPbkIntMgrProxy.updateAdnRecordsWithContentValuesInEfBySearch(
-                efid, values, pin2);
+            return iccPbkIntMgrProxy.isPhbReady();
         } else {
-            Rlog.e(TAG,"updateAdnRecordsWithContentValuesInEfBySearchUsingSubId " +
-                "iccPbkIntMgrProxy is null for Subscription:"+subId);
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
             return false;
         }
     }
 
-    public int getAdnCount() throws android.os.RemoteException {
-        return getAdnCountUsingSubId(getDefaultSubscription());
-    }
-
-    public int getAdnCountUsingSubId(int subId) throws android.os.RemoteException {
+    public List<UsimGroup> getUsimGroups(int subId) throws android.os.RemoteException {
         IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
                              getIccPhoneBookInterfaceManagerProxy(subId);
         if (iccPbkIntMgrProxy != null) {
-            return iccPbkIntMgrProxy.getAdnCount();
+            return iccPbkIntMgrProxy.getUsimGroups();
         } else {
-            Rlog.e(TAG,"getAdnCount iccPbkIntMgrProxy is" +
-                      "null for Subscription:"+subId);
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return null;
+        }
+    }
+
+    public String getUsimGroupById(int subId, int nGasId) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.getUsimGroupById(nGasId);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return null;
+        }
+    }
+
+    public boolean removeUsimGroupById(int subId, int nGasId) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.removeUsimGroupById(nGasId);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return false;
+        }
+    }
+
+    public int insertUsimGroup(int subId, String grpName) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.insertUsimGroup(grpName);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return -1;
+        }
+    }
+
+    public int updateUsimGroup(int subId, int nGasId, String grpName) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.updateUsimGroup(nGasId, grpName);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return -1;
+        }
+    }
+
+    public boolean addContactToGroup(int subId, int adnIndex, int grpIndex) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.addContactToGroup(adnIndex, grpIndex);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return false;
+        }
+    }
+
+    public boolean removeContactFromGroup(int subId, int adnIndex, int grpIndex) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.removeContactFromGroup(adnIndex, grpIndex);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return false;
+        }
+    }
+
+    public boolean updateContactToGroups(int subId, int adnIndex, int[] grpIdList) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.updateContactToGroups(adnIndex, grpIdList);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return false;
+        }
+    }
+
+    public boolean moveContactFromGroupsToGroups(int subId, int adnIndex, int[] fromGrpIdList, int[] toGrpIdList) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.moveContactFromGroupsToGroups(adnIndex,
+                    fromGrpIdList, toGrpIdList);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return false;
+        }
+    }
+
+    public int hasExistGroup(int subId, String grpName) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.hasExistGroup(grpName);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return -1;
+        }
+    }
+
+    public int getUsimGrpMaxNameLen(int subId) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.getUsimGrpMaxNameLen();
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return -1;
+        }
+    }
+
+    public int getUsimGrpMaxCount(int subId) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.getUsimGrpMaxCount();
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return -1;
+        }
+    }
+
+    public List<AlphaTag> getUsimAasList(int subId) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.getUsimAasList();
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return null;
+        }
+    }
+
+    public String getUsimAasById(int subId, int index) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.getUsimAasById(index);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return null;
+        }
+    }
+
+    public int insertUsimAas(int subId, String aasName) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.insertUsimAas(aasName);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
             return 0;
         }
     }
 
-    public int getAnrCount() throws android.os.RemoteException {
-        return getAnrCountUsingSubId(getDefaultSubscription());
-    }
-
-    public int getAnrCountUsingSubId(int subId) throws android.os.RemoteException {
+    public int getAnrCount(int subId) throws android.os.RemoteException {
         IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
                              getIccPhoneBookInterfaceManagerProxy(subId);
         if (iccPbkIntMgrProxy != null) {
             return iccPbkIntMgrProxy.getAnrCount();
         } else {
-            Rlog.e(TAG,"getAnrCount iccPbkIntMgrProxy is" +
-                      "null for Subscription:"+subId);
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
             return 0;
         }
     }
 
-    public int getEmailCount() throws android.os.RemoteException {
-        return getEmailCountUsingSubId(getDefaultSubscription());
-    }
-
-    public int getEmailCountUsingSubId(int subId) throws android.os.RemoteException {
+    public int getEmailCount(int subId) throws android.os.RemoteException {
         IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
                              getIccPhoneBookInterfaceManagerProxy(subId);
         if (iccPbkIntMgrProxy != null) {
             return iccPbkIntMgrProxy.getEmailCount();
         } else {
-            Rlog.e(TAG,"getEmailCount iccPbkIntMgrProxy is" +
-                      "null for Subscription:"+subId);
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
             return 0;
         }
     }
 
-    public int getSpareAnrCount() throws android.os.RemoteException {
-        return getSpareAnrCountUsingSubId(getDefaultSubscription());
-    }
-
-    public int getSpareAnrCountUsingSubId(int subId) throws android.os.RemoteException {
+    public int getUsimAasMaxCount(int subId) throws android.os.RemoteException {
         IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
                              getIccPhoneBookInterfaceManagerProxy(subId);
         if (iccPbkIntMgrProxy != null) {
-            return iccPbkIntMgrProxy.getSpareAnrCount();
+            return iccPbkIntMgrProxy.getUsimAasMaxCount();
         } else {
-            Rlog.e(TAG,"getSpareAnrCount iccPbkIntMgrProxy is" +
-                      "null for Subscription:"+subId);
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
             return 0;
         }
     }
 
-    public int getSpareEmailCount() throws android.os.RemoteException {
-        return getSpareEmailCountUsingSubId(getDefaultSubscription());
-    }
-
-    public int getSpareEmailCountUsingSubId(int subId) throws android.os.RemoteException {
+    public int getUsimAasMaxNameLen(int subId) throws android.os.RemoteException {
         IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
                              getIccPhoneBookInterfaceManagerProxy(subId);
         if (iccPbkIntMgrProxy != null) {
-            return iccPbkIntMgrProxy.getSpareEmailCount();
+            return iccPbkIntMgrProxy.getUsimAasMaxNameLen();
         } else {
-            Rlog.e(TAG,"getSpareEmailCount iccPbkIntMgrProxy is" +
-                      "null for Subscription:"+subId);
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
             return 0;
+        }
+    }
+
+    public boolean updateUsimAas(int subId, int index, int pbrIndex, String aasName) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.updateUsimAas(index, pbrIndex, aasName);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return false;
+        }
+    }
+
+    public boolean removeUsimAasById(int subId, int index, int pbrIndex) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.removeUsimAasById(index, pbrIndex);
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return false;
+        }
+    }
+
+    public boolean hasSne(int subId) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.hasSne();
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return false;
+        }
+    }
+
+    public int getSneRecordLen(int subId) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.getSneRecordLen();
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return 0;
+        }
+    }
+
+    public boolean isAdnAccessible(int subId) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.isAdnAccessible();
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return true;
+        }
+    }
+
+    public UsimPBMemInfo[] getPhonebookMemStorageExt(int subId) throws android.os.RemoteException {
+        IccPhoneBookInterfaceManagerProxy iccPbkIntMgrProxy =
+                             getIccPhoneBookInterfaceManagerProxy(subId);
+        if (iccPbkIntMgrProxy != null) {
+            return iccPbkIntMgrProxy.getPhonebookMemStorageExt();
+        } else {
+            Rlog.e(TAG, "updateAdnRecordsInEfBySearch iccPbkIntMgrProxy is" +
+                      " null for Subscription:" + subId);
+            return null;
         }
     }
 
@@ -258,4 +564,9 @@ public class UiccPhoneBookController extends IIccPhoneBook.Stub {
     private int getDefaultSubscription() {
         return PhoneFactory.getDefaultSubscription();
     }
+
+    public boolean isUICCCard(int subId) {
+        return getIccPhoneBookInterfaceManagerProxy(subId).isUICCCard();
+    }
+
 }

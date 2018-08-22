@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2007-2008 Esmertec AG.
  * Copyright (C) 2007-2008 The Android Open Source Project
  *
@@ -155,11 +160,17 @@ public class PduComposer {
         /* make the message */
         switch (type) {
             case PduHeaders.MESSAGE_TYPE_SEND_REQ:
-            case PduHeaders.MESSAGE_TYPE_RETRIEVE_CONF:
-                if (makeSendRetrievePdu(type) != PDU_COMPOSE_SUCCESS) {
+                if (makeSendReqPdu() != PDU_COMPOSE_SUCCESS) {
                     return null;
                 }
                 break;
+            /// M:Code analyze 003,add a new branch for composing notifyInd pdu @{
+            case PduHeaders.MESSAGE_TYPE_NOTIFICATION_IND:
+                if (makeNotifyInd() != PDU_COMPOSE_SUCCESS) {
+                    return null;
+                }
+                break;
+            /// @}
             case PduHeaders.MESSAGE_TYPE_NOTIFYRESP_IND:
                 if (makeNotifyResp() != PDU_COMPOSE_SUCCESS) {
                     return null;
@@ -175,6 +186,13 @@ public class PduComposer {
                     return null;
                 }
                 break;
+            /// M:Code analyze 004,add a new branch for composing retrieve conf pdu @{
+            case PduHeaders.MESSAGE_TYPE_RETRIEVE_CONF:
+                if (makeRetrievePdu() != PDU_COMPOSE_SUCCESS) {
+                    return null;
+                }
+                break;
+            /// @}
             default:
                 return null;
         }
@@ -565,7 +583,6 @@ public class PduComposer {
             case PduHeaders.PRIORITY:
             case PduHeaders.DELIVERY_REPORT:
             case PduHeaders.READ_REPORT:
-            case PduHeaders.RETRIEVE_STATUS:
                 int octet = mPduHeader.getOctet(field);
                 if (0 == octet) {
                     return PDU_COMPOSE_FIELD_NOT_SET;
@@ -586,7 +603,6 @@ public class PduComposer {
                 break;
 
             case PduHeaders.SUBJECT:
-            case PduHeaders.RETRIEVE_TEXT:
                 EncodedStringValue enString =
                     mPduHeader.getEncodedStringValue(field);
                 if (null == enString) {
@@ -632,7 +648,15 @@ public class PduComposer {
                 mStack.newbuf();
                 PositionMarker expiryStart = mStack.mark();
 
-                append(PduHeaders.VALUE_RELATIVE_TOKEN);
+                /// M:Code analyze 005,change logic for BackupRestore @{
+                if (mForBackup) {
+                    Log.e(LOG_TAG, "absolute token");
+                    append(PduHeaders.VALUE_ABSOLUTE_TOKEN);
+                } else {
+                    Log.e(LOG_TAG, "relative token");
+                    append(PduHeaders.VALUE_RELATIVE_TOKEN);
+                }
+                /// @}
                 appendLongInteger(expiry);
 
                 int expiryLength = expiryStart.getLength();
@@ -725,6 +749,9 @@ public class PduComposer {
         }
 
         // X-Mms-Report-Allowed Optional (not support)
+        /// M:Code analyze 007,add report allowed to support report @{
+        appendHeader(PduHeaders.REPORT_ALLOWED);
+        /// @}
         return PDU_COMPOSE_SUCCESS;
     }
 
@@ -760,7 +787,7 @@ public class PduComposer {
     /**
      * Make Send.req.
      */
-    private int makeSendRetrievePdu(int type) {
+    private int makeSendReqPdu() {
         if (mMessage == null) {
             mMessage = new ByteArrayOutputStream();
             mPosition = 0;
@@ -768,7 +795,7 @@ public class PduComposer {
 
         // X-Mms-Message-Type
         appendOctet(PduHeaders.MESSAGE_TYPE);
-        appendOctet(type);
+        appendOctet(PduHeaders.MESSAGE_TYPE_SEND_REQ);
 
         // X-Mms-Transaction-ID
         appendOctet(PduHeaders.TRANSACTION_ID);
@@ -834,25 +861,20 @@ public class PduComposer {
         // X-Mms-Read-Report Optional
         appendHeader(PduHeaders.READ_REPORT);
 
-        if (type == PduHeaders.MESSAGE_TYPE_RETRIEVE_CONF) {
-            // X-Mms-Retrieve-Status Optional
-            appendHeader(PduHeaders.RETRIEVE_STATUS);
-            // X-Mms-Retrieve-Text Optional
-            appendHeader(PduHeaders.RETRIEVE_TEXT);
-        }
-
-
         //    Content-Type
         appendOctet(PduHeaders.CONTENT_TYPE);
 
         //  Message body
-        return makeMessageBody(type);
+        makeMessageBody(2);
+
+        return PDU_COMPOSE_SUCCESS;  // Composing the message is OK
     }
 
+    /// M:Code analyze 009,add a parameter into the method for distiguish send pdu or retrieve pdu @{
     /**
      * Make message body.
      */
-    private int makeMessageBody(int type) {
+    private int makeMessageBody(int pduType) {
         // 1. add body informations
         mStack.newbuf();  // Switching buffer because we need to
 
@@ -868,14 +890,17 @@ public class PduComposer {
 
         appendShortInteger(contentTypeIdentifier.intValue());
 
-        // content-type parameter: start
-        PduBody body;
-        if (type == PduHeaders.MESSAGE_TYPE_RETRIEVE_CONF) {
+        /// M:Code analyze 009,add a parameter into the method for distiguish send pdu or retrieve pdu @{
+        PduBody body = null;
+        if (pduType == 1) {
             body = ((RetrieveConf) mPdu).getBody();
-        } else {
+        } else if (pduType == 2) {
             body = ((SendReq) mPdu).getBody();
         }
+        /// @}
+
         if (null == body || body.getPartsNum() == 0) {
+            Log.d(LOG_TAG, "makeMessageBody body == null");
             // empty message
             appendUintvarInteger(0);
             mStack.pop();
@@ -943,22 +968,28 @@ public class PduComposer {
              */
             byte[] name = part.getName();
 
-            if (null == name) {
+            /// M:Code analyze 010,add a extra judgement if it is null @{
+            if (null == name || name.length == 0) {
                 name = part.getFilename();
 
-                if (null == name) {
+                if (null == name || name.length == 0) {
                     name = part.getContentLocation();
-
-                    if (null == name) {
-                        name = part.getContentId();
-
-                        if (null == name) {
-                            // At lease one of name, filename, Content-location, Content id
-                            // should be available.
-                            return PDU_COMPOSE_CONTENT_ERROR;
-                        }
+                    if (null == name || name.length == 0) {
+                         name = part.getContentId();
+                         if (name != null && name.length != 0) {
+                             Log.d(LOG_TAG, "makeMessageBody name 1= " + name.toString());
+                         } else {
+                              /* at lease one of name, filename, Content-location
+                               * should be available.
+                               */
+                              return PDU_COMPOSE_CONTENT_ERROR;
+                         }
                     }
                 }
+            }
+            /// @}
+            if (name != null && name.length != 0) {
+                Log.d(LOG_TAG, "makeMessageBody name 2= " + name.toString());
             }
             appendOctet(PduPart.P_DEP_NAME);
             appendTextString(name);
@@ -978,7 +1009,8 @@ public class PduComposer {
             // content id
             byte[] contentId = part.getContentId();
 
-            if (null != contentId) {
+            /// M:Code analyze 010,add a extra judgement if it is null
+            if (null != contentId && contentId.length != 0) {
                 appendOctet(PduPart.P_CONTENT_ID);
                 if (('<' == contentId[0]) && ('>' == contentId[contentId.length - 1])) {
                     appendQuotedString(contentId);
@@ -989,9 +1021,10 @@ public class PduComposer {
 
             // content-location
             byte[] contentLocation = part.getContentLocation();
-            if (null != contentLocation) {
-            	appendOctet(PduPart.P_CONTENT_LOCATION);
-            	appendTextString(contentLocation);
+            /// M:Code analyze 010,add a extra judgement if it is null
+            if (null != contentLocation && contentLocation.length != 0) {
+                appendOctet(PduPart.P_CONTENT_LOCATION);
+                appendTextString(contentLocation);
             }
 
             // content
@@ -1042,6 +1075,7 @@ public class PduComposer {
 
         return PDU_COMPOSE_SUCCESS;
     }
+    /// @}
 
     /**
      *  Record current message informations.
@@ -1199,7 +1233,191 @@ public class PduComposer {
             return PDU_IPV6_ADDRESS_TYPE;
         } else {
             // Unknown address.
+            Log.i(LOG_TAG, "checkAddressType PDU_UNKNOWN_ADDRESS_TYPE");
             return PDU_UNKNOWN_ADDRESS_TYPE;
         }
     }
+
+    /// new variable and methods
+    /// M:Code analyze 001,add a variable for log tag @{
+    private static final String LOG_TAG = "PduComposer";
+    /// @}
+
+    /// M:Code analyze 002,Method for BackupRestore, for this application @{
+    /* 1.RetrieveConf's DATE should use the value from pdu instead of
+     *   setting system time directly
+     * 2.RetrivevConf's read status should use column "READ" in table pdu,
+     *   instead of "READ_STATUS" which is null in db*/
+    private boolean mForBackup = false;
+    public byte[] make(boolean forBackup) {
+        mForBackup = forBackup;
+        return make();
+    }
+    /// @}
+
+    /// M:Code analyze 006,add a new method for composing notifyInd pdu @{
+    /**
+     * Make NotifyInd.Ind.
+     */
+    private int makeNotifyInd() {
+        if (mMessage == null) {
+            mMessage = new ByteArrayOutputStream();
+            mPosition = 0;
+        }
+
+        //    X-Mms-Message-Type
+        appendOctet(PduHeaders.MESSAGE_TYPE);
+        appendOctet(PduHeaders.MESSAGE_TYPE_NOTIFICATION_IND);
+
+        // X-Mms-Transaction-ID
+        if (appendHeader(PduHeaders.TRANSACTION_ID) != PDU_COMPOSE_SUCCESS) {
+            return PDU_COMPOSE_CONTENT_ERROR;
+        }
+
+        // X-Mms-MMS-Version
+        if (appendHeader(PduHeaders.MMS_VERSION) != PDU_COMPOSE_SUCCESS) {
+            return PDU_COMPOSE_CONTENT_ERROR;
+        }
+        //  X-Mms-Class
+        // Message-class-value = personal
+        if (appendHeader(PduHeaders.MESSAGE_CLASS) != PDU_COMPOSE_SUCCESS) {
+            return PDU_COMPOSE_CONTENT_ERROR;
+        }
+        // X-Mms-Message-Size
+        appendOctet(PduHeaders.MESSAGE_SIZE);
+        long size = ((NotificationInd) mPdu).getMessageSize();
+        appendLongInteger(size);
+        // X-Mms-Expiry Optional
+        if (appendHeader(PduHeaders.EXPIRY) != PDU_COMPOSE_SUCCESS) {
+            return PDU_COMPOSE_CONTENT_ERROR;
+        }
+        // X-Mms-Content-location
+        appendOctet(PduHeaders.CONTENT_LOCATION);
+        byte[] contentLocation = ((NotificationInd) mPdu).getContentLocation();
+        if (contentLocation != null) {
+        Log.d(LOG_TAG, "makeNotifyInd contentLocation != null");
+           appendTextString(contentLocation);
+        } else {
+           Log.d(LOG_TAG, "makeNotifyInd contentLocation  = null");
+        }
+        //  X-Mms-Subject
+        EncodedStringValue subject = ((NotificationInd) mPdu).getSubject();
+        if (subject != null) {
+           Log.d(LOG_TAG, "makeNotifyInd subject != null");
+           appendOctet(PduHeaders.SUBJECT);
+           appendEncodedString(subject);
+        } else {
+           Log.d(LOG_TAG, "makeNotifyInd subject  = null");
+        }
+
+        // Date Date-value Optional.
+        appendHeader(PduHeaders.DATE);
+
+        //  X-Mms-From
+        if (appendHeader(PduHeaders.FROM) != PDU_COMPOSE_SUCCESS) {
+            return PDU_COMPOSE_CONTENT_ERROR;
+        }
+        //  X-Mms-Status
+        if (appendHeader(PduHeaders.STATUS) != PDU_COMPOSE_SUCCESS) {
+            return PDU_COMPOSE_CONTENT_ERROR;
+        }
+
+        return PDU_COMPOSE_SUCCESS;
+    }
+    /// @}
+
+    /// M:Code analyze 008,add a new method for composing retrieve pdu @{
+    private int makeRetrievePdu() {
+        Log.d(LOG_TAG, "makeRetrievePdu begin");
+        if (mMessage == null) {
+            mMessage = new ByteArrayOutputStream();
+            mPosition = 0;
+        }
+
+        // X-Mms-Message-Type
+        appendOctet(PduHeaders.MESSAGE_TYPE);
+        appendOctet(PduHeaders.MESSAGE_TYPE_RETRIEVE_CONF);
+
+        byte[] trid = mPduHeader.getTextString(PduHeaders.TRANSACTION_ID);
+        if (trid == null) {
+            // Transaction-ID should be set(by Transaction) before make().
+            Log.d(LOG_TAG, "Transaction ID is null");
+        } else {
+            // X-Mms-Transaction-ID
+            appendOctet(PduHeaders.TRANSACTION_ID);
+            appendTextString(trid);
+        }
+
+        //  X-Mms-MMS-Version
+        if (appendHeader(PduHeaders.MMS_VERSION) != PDU_COMPOSE_SUCCESS) {
+            return PDU_COMPOSE_CONTENT_ERROR;
+        }
+
+        // Date Date-value Optional.
+        appendHeader(PduHeaders.DATE);
+
+        // From
+        if (appendHeader(PduHeaders.FROM) != PDU_COMPOSE_SUCCESS) {
+            return PDU_COMPOSE_CONTENT_ERROR;
+        }
+
+        boolean recipient = false;
+
+        // To
+        if (appendHeader(PduHeaders.TO) != PDU_COMPOSE_CONTENT_ERROR) {
+            recipient = true;
+        }
+
+        // Cc
+        if (appendHeader(PduHeaders.CC) != PDU_COMPOSE_CONTENT_ERROR) {
+            recipient = true;
+        }
+
+        // Bcc
+        if (appendHeader(PduHeaders.BCC) != PDU_COMPOSE_CONTENT_ERROR) {
+            recipient = true;
+        }
+
+        // Need at least one of "cc", "bcc" and "to".
+        if (false == recipient) {
+            return PDU_COMPOSE_CONTENT_ERROR;
+        }
+
+        // Subject Optional
+        appendHeader(PduHeaders.SUBJECT);
+
+        // X-Mms-Message-Class Optional
+        // Message-class-value = Class-identifier | Token-text
+        appendHeader(PduHeaders.MESSAGE_CLASS);
+
+        // X-Mms-Expiry Optional
+        appendHeader(PduHeaders.EXPIRY);
+
+        // X-Mms-Priority Optional
+        appendHeader(PduHeaders.PRIORITY);
+
+        // X-Mms-Delivery-Report Optional
+        appendHeader(PduHeaders.DELIVERY_REPORT);
+
+        // X-Mms-Read-Report Optional
+        appendHeader(PduHeaders.READ_REPORT);
+
+        /* Method for BackupRestore, for this application,
+         * 1.RetrieveConf's DATE should use the value from pdu instead of
+         *   setting system time directly
+         * 2.RetrivevConf's read status should use column "READ" in table pdu,
+         *   instead of "READ_STATUS" which is null in db*/
+        if (mForBackup == true) {
+            appendHeader(PduHeaders.READ_STATUS);
+        }
+
+        //    Content-Type
+        appendOctet(PduHeaders.CONTENT_TYPE);
+
+        //  Message body
+        makeMessageBody(1);
+        Log.d(LOG_TAG, "makeRetrievePdu end");
+        return PDU_COMPOSE_SUCCESS;  // Composing the message is OK
+    }
+    /// @}
 }

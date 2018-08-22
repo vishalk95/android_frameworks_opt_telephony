@@ -121,12 +121,3 @@ class ItemsIconId extends ValueObject {
         return ComprehensionTlvTag.ITEM_ICON_ID_LIST;
     }
 }
-
-class ActivateDescriptor extends ValueObject {
-    public int target;
-
-    @Override
-    ComprehensionTlvTag getTag() {
-        return ComprehensionTlvTag.ACTIVATE_DESCRIPTOR;
-    }
-}

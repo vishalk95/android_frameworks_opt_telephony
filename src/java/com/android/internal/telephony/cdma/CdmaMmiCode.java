@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -71,6 +76,11 @@ public final class CdmaMmiCode  extends Handler implements MmiCode {
 
     State mState = State.PENDING;
     CharSequence mMessage;
+
+    //For ALPS01471897
+    private boolean mUserInitiatedMMI = false;
+    //end
+
 
     // Class Variables
 
@@ -147,6 +157,7 @@ public final class CdmaMmiCode  extends Handler implements MmiCode {
         mPhone = phone;
         mContext = phone.getContext();
         mUiccApplication = app;
+        mUserInitiatedMMI = false;
     }
 
     // MmiCode implementation
@@ -166,6 +177,16 @@ public final class CdmaMmiCode  extends Handler implements MmiCode {
     public Phone
     getPhone() {
         return ((Phone) mPhone);
+    }
+
+    //For ALPS01471897
+    public void setUserInitiatedMMI(boolean userinit)
+    {
+       mUserInitiatedMMI = userinit;
+    }
+
+    public boolean getUserInitiatedMMI() {
+      return mUserInitiatedMMI;
     }
 
     // inherited javadoc suffices

@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -88,7 +93,6 @@ public abstract class Call {
     public abstract Phone getPhone();
     public abstract boolean isMultiparty();
     public abstract void hangup() throws CallStateException;
-
 
     /**
      * hasConnection

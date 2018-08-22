@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2008 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -64,14 +69,16 @@ public final class RuimFileHandler extends IccFileHandler {
         case EF_CSIM_IMSIM:
         case EF_CSIM_CDMAHOME:
         case EF_CSIM_EPRL:
-        case EF_CSIM_PRL:
         case EF_CSIM_MIPUPP:
+        case EF_CDMA_ECC:
             return MF_SIM + DF_CDMA;
-        case EF_CSIM_MSPL:
-        case EF_CSIM_MLPL:
-            return MF_SIM + DF_TELECOM + DF_MMSS;
         }
         return getCommonIccEFPath(efid);
+    }
+
+    protected String getEFPath(int efid, boolean is7FFF) {
+        logd("[RuimFH]GetEFPath : efid = " + efid + ", is7FFF = " + is7FFF);
+        return getEFPath(efid);
     }
 
     @Override

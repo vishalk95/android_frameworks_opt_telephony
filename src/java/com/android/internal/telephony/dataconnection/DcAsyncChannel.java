@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2011 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +30,7 @@ import android.net.LinkProperties;
 import android.net.NetworkCapabilities;
 import android.net.ProxyInfo;
 import android.os.Message;
+
 
 /**
  * AsyncChannel to a DataConnection
@@ -59,7 +65,14 @@ public class DcAsyncChannel extends AsyncChannel {
     public static final int REQ_RESET = BASE + 12;
     public static final int RSP_RESET = BASE + 13;
 
-    private static final int CMD_TO_STRING_COUNT = RSP_RESET - BASE + 1;
+    public static final int REQ_IS_ACTIVE = BASE + 14;
+    public static final int RSP_IS_ACTIVE = BASE + 15;
+
+    //VoLTE
+    public static final int REQ_GET_LAST_DATA_CONN_FAIL_CAUSE = BASE + 16;
+    public static final int RSP_GET_LAST_DATA_CONN_FAIL_CAUSE = BASE + 17;
+
+    private static final int CMD_TO_STRING_COUNT = RSP_GET_LAST_DATA_CONN_FAIL_CAUSE - BASE + 1;
     private static String[] sCmdToString = new String[CMD_TO_STRING_COUNT];
     static {
         sCmdToString[REQ_IS_INACTIVE - BASE] = "REQ_IS_INACTIVE";
@@ -78,6 +91,12 @@ public class DcAsyncChannel extends AsyncChannel {
         sCmdToString[RSP_GET_NETWORK_CAPABILITIES - BASE] = "RSP_GET_NETWORK_CAPABILITIES";
         sCmdToString[REQ_RESET - BASE] = "REQ_RESET";
         sCmdToString[RSP_RESET - BASE] = "RSP_RESET";
+        sCmdToString[REQ_IS_ACTIVE - BASE] = "REQ_IS_ACTIVE";
+        sCmdToString[RSP_IS_ACTIVE - BASE] = "RSP_IS_ACTIVE";
+        sCmdToString[REQ_GET_LAST_DATA_CONN_FAIL_CAUSE - BASE] =
+                "REQ_GET_LAST_DATA_CONN_FAIL_CAUSE";
+        sCmdToString[RSP_GET_LAST_DATA_CONN_FAIL_CAUSE - BASE] =
+                "RSP_GET_LAST_DATA_CONN_FAIL_CAUSE";
     }
 
     // Convert cmd to string or null if unknown
@@ -368,17 +387,16 @@ public class DcAsyncChannel extends AsyncChannel {
      *        AsyncResult.result = FailCause and AsyncResult.exception = Exception().
      */
     public void bringUp(ApnContext apnContext, int initialMaxRetry, int profileId,
-            int rilRadioTechnology, boolean retryWhenSSChange, Message onCompletedMsg,
-            int connectionGeneration) {
+            int rilRadioTechnology, boolean retryWhenSSChange, Message onCompletedMsg) {
         if (DBG) {
             log("bringUp: apnContext=" + apnContext + " initialMaxRetry=" + initialMaxRetry
                 + " onCompletedMsg=" + onCompletedMsg);
         }
         sendMessage(DataConnection.EVENT_CONNECT,
                     new ConnectionParams(apnContext, initialMaxRetry, profileId,
-                            rilRadioTechnology, retryWhenSSChange, onCompletedMsg,
-                            connectionGeneration));
+                            rilRadioTechnology, retryWhenSSChange, onCompletedMsg));
     }
+
 
     /**
      * Tear down the connection through the apn on the network.
@@ -434,5 +452,49 @@ public class DcAsyncChannel extends AsyncChannel {
 
     public String[] getPcscfAddr() {
         return mDc.mPcscfAddr;
+    }
+
+// M: for checking if the state is active or not
+    /**
+     * Request if the state machine is in the active state.
+     * Response {@link #rspIsActive}
+     */
+    public void reqIsActive() {
+        sendMessage(REQ_IS_ACTIVE);
+        if (DBG) log("reqIsIActive");
+    }
+
+    /**
+     * Evaluate RSP_IS_ACTIVE.
+     *
+     * @return true if the state machine is in the active state.
+     */
+    public boolean rspIsActive(Message response) {
+        boolean retVal = response.arg1 == 1;
+        if (DBG) log("rspIsActive=" + retVal);
+        return retVal;
+    }
+
+    /**
+     * @return true if the state machine is in the active state.
+     */
+    public boolean isActiveSync() {
+        Message response = sendMessageSynchronously(REQ_IS_ACTIVE);
+        if ((response != null) && (response.what == RSP_IS_ACTIVE)) {
+            return rspIsActive(response);
+        } else {
+            log("rspIsActive error response=" + response);
+            return false;
+        }
+    }
+
+    public DcFailCause getLastDataConnectionFailCauseSync() {
+        Message response = sendMessageSynchronously(REQ_GET_LAST_DATA_CONN_FAIL_CAUSE);
+        if ((response != null) && (response.what == RSP_GET_LAST_DATA_CONN_FAIL_CAUSE)) {
+            return (DcFailCause) response.obj;
+        } else {
+            log("getLastDataConnectionFailCauseSync error response= " + response);
+            return DcFailCause.UNKNOWN;
+        }
     }
 }

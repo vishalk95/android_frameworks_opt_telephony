@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2007-2008 Esmertec AG.
  * Copyright (C) 2007-2008 The Android Open Source Project
  *
@@ -53,6 +58,9 @@ public class PduParser {
     private static final int THE_FIRST_PART = 0;
     private static final int THE_LAST_PART = 1;
 
+    /// M: For fix bug, parse read report failed.
+    private static final int UNSIGNED_INT_LIMIT = 2;
+
     /**
      * The pdu data.
      */
@@ -82,7 +90,9 @@ public class PduParser {
      * The log tag.
      */
     private static final String LOG_TAG = "PduParser";
-    private static final boolean DEBUG = false;
+    /// M:Code analyze 001, modified for useless @{
+    private static final boolean DEBUG = true;
+    /// @}
     private static final boolean LOCAL_LOGV = false;
 
     /**
@@ -109,6 +119,7 @@ public class PduParser {
      */
     public GenericPdu parse(){
         if (mPduDataStream == null) {
+            Log.i(LOG_TAG, "Input parse stream is null");
             return null;
         }
 
@@ -116,6 +127,7 @@ public class PduParser {
         mHeaders = parseHeaders(mPduDataStream);
         if (null == mHeaders) {
             // Parse headers failed.
+            Log.i(LOG_TAG, "Parse PduHeader Failed");
             return null;
         }
 
@@ -127,6 +139,66 @@ public class PduParser {
             log("check mandatory headers failed!");
             return null;
         }
+        /// M:Code analyze 003,parse mPduDataStream,if the unsigned integer is more than 2
+        /// reconstruct retrieveConf @{
+        mPduDataStream.mark(1);
+        int count = parseUnsignedInt(mPduDataStream);
+        mPduDataStream.reset();
+        if (PduHeaders.MESSAGE_TYPE_RETRIEVE_CONF == messageType && count >= UNSIGNED_INT_LIMIT) {
+            byte[] contentType = mHeaders.getTextString(PduHeaders.CONTENT_TYPE);
+            if (null == contentType) {
+                Log.i(LOG_TAG, "Parse MESSAGE_TYPE_RETRIEVE_CONF Failed: content Type is null _0");
+                return null;
+            }
+            String contentTypeStr = new String(contentType);
+            contentTypeStr = contentTypeStr.toLowerCase();
+            if (!contentTypeStr.equals(ContentType.MULTIPART_MIXED)
+                    && !contentTypeStr.equals(ContentType.MULTIPART_RELATED)
+                    && !contentTypeStr.equals(ContentType.MULTIPART_ALTERNATIVE)) {
+
+                if (contentTypeStr.equals(ContentType.TEXT_PLAIN)) {
+                    Log.i(LOG_TAG, "Content Type is text/plain");
+
+                    PduPart theOnlyPart = new PduPart();
+                    theOnlyPart.setContentType(contentType);
+                    theOnlyPart.setContentLocation(Long.toOctalString(
+                            System.currentTimeMillis()).getBytes());
+                    theOnlyPart.setContentId("<part1>".getBytes());
+
+                    mPduDataStream.mark(1);
+
+                    int partDataLen = 0;
+                    while (mPduDataStream.read() != -1) {
+                        partDataLen++;
+                    }
+
+                    byte[] partData = new byte[partDataLen];
+                    Log.i(LOG_TAG, "got part length: " + partDataLen);
+                    mPduDataStream.reset();
+                    mPduDataStream.read(partData, 0, partDataLen);
+                    String showData = new String(partData);
+                    Log.i(LOG_TAG, "show data: " + showData);
+
+                    theOnlyPart.setData(partData);
+                    Log.i(LOG_TAG, "setData finish");
+                    PduBody onlyPartBody = new PduBody();
+                    onlyPartBody.addPart(theOnlyPart);
+                    RetrieveConf retrieveConf = null;
+                    try {
+                        retrieveConf = new RetrieveConf(mHeaders, onlyPartBody);
+                    } catch (Exception e) {
+                        Log.i(LOG_TAG, "new RetrieveConf has exception");
+                    }
+                    if (retrieveConf == null) {
+                        Log.i(LOG_TAG, "retrieveConf is null");
+                    }
+                    return retrieveConf;
+                }
+
+                // Here maybe we can add other content type support.
+            }
+        }
+        /// @}
 
         if ((PduHeaders.MESSAGE_TYPE_SEND_REQ == messageType) ||
                 (PduHeaders.MESSAGE_TYPE_RETRIEVE_CONF == messageType)) {
@@ -134,6 +206,7 @@ public class PduParser {
             mBody = parseParts(mPduDataStream);
             if (null == mBody) {
                 // Parse parts failed.
+                Log.i(LOG_TAG, "Parse parts Failed");
                 return null;
             }
         }
@@ -174,12 +247,18 @@ public class PduParser {
 
                 byte[] contentType = retrieveConf.getContentType();
                 if (null == contentType) {
+                    Log.i(LOG_TAG, "Parse MESSAGE_TYPE_RETRIEVE_CONF Failed: content Type is null _1");
                     return null;
                 }
                 String ctTypeStr = new String(contentType);
+                /// M:Code analyze 004,make the string into lowercase,matching the content type @{
+                ctTypeStr = ctTypeStr.toLowerCase();
+                /// @}
                 if (ctTypeStr.equals(ContentType.MULTIPART_MIXED)
                         || ctTypeStr.equals(ContentType.MULTIPART_RELATED)
-                        || ctTypeStr.equals(ContentType.MULTIPART_ALTERNATIVE)) {
+                        || ctTypeStr.equals(ContentType.MULTIPART_ALTERNATIVE)
+                        /// M:Code analyze 005,add a new content type text/plain
+                        || ctTypeStr.equals(ContentType.TEXT_PLAIN)) {
                     // The MMS content type must be "application/vnd.wap.multipart.mixed"
                     // or "application/vnd.wap.multipart.related"
                     // or "application/vnd.wap.multipart.alternative"
@@ -192,6 +271,7 @@ public class PduParser {
                     mBody.addPart(0, firstPart);
                     return retrieveConf;
                 }
+                Log.i(LOG_TAG, "Parse MESSAGE_TYPE_RETRIEVE_CONF Failed: content Type is null _2");
                 return null;
             case PduHeaders.MESSAGE_TYPE_DELIVERY_IND:
                 if (LOCAL_LOGV) {
@@ -237,6 +317,7 @@ public class PduParser {
         if (pduDataStream == null) {
             return null;
         }
+
         boolean keepParsing = true;
         PduHeaders headers = new PduHeaders();
 
@@ -277,6 +358,7 @@ public class PduParser {
                         case PduHeaders.MESSAGE_TYPE_DELETE_CONF:
                         case PduHeaders.MESSAGE_TYPE_CANCEL_REQ:
                         case PduHeaders.MESSAGE_TYPE_CANCEL_CONF:
+                            Log.i(LOG_TAG, "PduParser: parseHeaders: We don't support these kind of messages now.");
                             return null;
                     }
                     try {
@@ -346,10 +428,20 @@ public class PduParser {
                 {
                     try {
                         long value = parseLongInteger(pduDataStream);
-                        if (LOCAL_LOGV) {
-                            Log.v(LOG_TAG, "parseHeaders: longint: " + headerField + " value: " +
-                                    value);
+                         /// M:Code analyze 002,Method for BackupRestore, for this application
+                         /* 1.RetrieveConf's DATE should use the value from pdu instead of
+                         *   setting system time directly
+                         * 2.RetrivevConf's read status should use column "READ" in table pdu,
+                         *   instead of "READ_STATUS" which is null in db*/
+                        /// M: add for saving sent time of received messages,
+                        /// no matter that mForRestore is true or false. @{
+                        if (headerField == PduHeaders.DATE) {
+                            headers.setLongInteger(value, PduHeaders.DATE_SENT);
+                            if (mForRestore == false) {
+                                value = System.currentTimeMillis() / 1000; //change date to local time
+                            }
                         }
+                        /// @}
                         headers.setLongInteger(value, headerField);
                     } catch(RuntimeException e) {
                         log(headerField + "is not Long-Integer header field!");
@@ -847,6 +939,7 @@ public class PduParser {
             int startPos = pduDataStream.available();
             if (startPos <= 0) {
                 // Invalid part.
+                Log.i(LOG_TAG, "PduParser: parseParts: Invalid part.");
                 return null;
             }
 
@@ -877,10 +970,12 @@ public class PduParser {
             if (partHeaderLen > 0) {
                 if (false == parsePartHeaders(pduDataStream, part, partHeaderLen)) {
                     // Parse part header faild.
+                    Log.i(LOG_TAG, "PduParser: parseParts: Parse part header faild.");
                     return null;
                 }
             } else if (partHeaderLen < 0) {
                 // Invalid length of content-type.
+                Log.i(LOG_TAG, "PduParser: parseParts: Invalid length of content-type");
                 return null;
             }
 
@@ -891,6 +986,7 @@ public class PduParser {
                     && (null == part.getName())
                     && (null == part.getFilename())
                     && (null == part.getContentId())) {
+                Log.i(LOG_TAG, "PduParser: parseParts: Hasn't find ContentLocation,so generate one.");
                 part.setContentLocation(Long.toOctalString(
                         System.currentTimeMillis()).getBytes());
             }
@@ -899,7 +995,14 @@ public class PduParser {
             if (dataLength > 0) {
                 byte[] partData = new byte[dataLength];
                 String partContentType = new String(part.getContentType());
-                pduDataStream.read(partData, 0, dataLength);
+
+                /// M: Fix ALPS00362106, if server not send all data, treat it fail so we can retry
+                int readLen = pduDataStream.read(partData, 0, dataLength);
+                if (readLen != dataLength) {
+                    Log.d(LOG_TAG, "len=" + dataLength + " readLen=" + readLen);
+                    return null;
+                }
+                /// @}
                 if (partContentType.equalsIgnoreCase(ContentType.MULTIPART_ALTERNATIVE)) {
                     // parse "multipart/vnd.wap.multipart.alternative".
                     PduBody childBody = parseParts(new ByteArrayInputStream(partData));
@@ -948,7 +1051,7 @@ public class PduParser {
      */
     private static void log(String text) {
         if (LOCAL_LOGV) {
-            Log.v(LOG_TAG, text);
+            Log.i(LOG_TAG, text);
         }
     }
 
@@ -1034,6 +1137,7 @@ public class PduParser {
         assert(-1 != temp);
         int first = temp & 0xFF;
         if (first == 0) {
+            // Support MMS with empty subject
             return new EncodedStringValue("");
         }
 
@@ -1459,6 +1563,7 @@ public class PduParser {
                         try {
                             int charsetInt = CharacterSets.getMibEnumValue(
                                     new String(charsetStr));
+                            Log.i(LOG_TAG, "Parse CharacterSets: charsetStr");
                             map.put(PduPart.P_CHARSET, charsetInt);
                         } catch (UnsupportedEncodingException e) {
                             // Not a well-known charset, use "*".
@@ -1469,6 +1574,7 @@ public class PduParser {
                         //Well-known-charset
                         int charset = (int) parseIntegerValue(pduDataStream);
                         if (map != null) {
+                            Log.i(LOG_TAG, "Parse Well-known-charset: charset");
                             map.put(PduPart.P_CHARSET, charset);
                         }
                     }
@@ -1477,13 +1583,13 @@ public class PduParser {
                     lastLen = length - (startPos - tempPos);
                     break;
 
-                    /**
-                     * From oma-ts-mms-conf-v1_3.pdf
+                    /// M:Code analyze 006,add for new feature @{
+                    /* From oma-ts-mms-conf-v1_3.pdf
                      * A name for multipart object SHALL be encoded using name-parameter
                      * for Content-Type header in WSP multipart headers.
                      *
                      * From wap-230-wsp-20010705-a.pdf
-                     * name = Text-String
+                     * name, filename, comment, domain, path = Text-String
                      */
                 case PduPart.P_DEP_NAME:
                 case PduPart.P_NAME:
@@ -1495,6 +1601,49 @@ public class PduParser {
                     tempPos = pduDataStream.available();
                     lastLen = length - (startPos - tempPos);
                     break;
+                case PduPart.P_DEP_FILENAME:
+                case PduPart.P_FILENAME:
+                    byte[] fileName = parseWapString(pduDataStream, TYPE_TEXT_STRING);
+                    if ((null != fileName) && (null != map)) {
+                        map.put(PduPart.P_FILENAME, fileName);
+                    }
+
+                    tempPos = pduDataStream.available();
+                    lastLen = length - (startPos - tempPos);
+                    break;
+                case PduPart.P_PATH:
+                case PduPart.P_DEP_PATH:
+                    byte[] path = parseWapString(pduDataStream, TYPE_TEXT_STRING);
+                    if ((null != path) && (null != map)) {
+                        map.put(PduPart.P_PATH, path);
+                    }
+
+                    tempPos = pduDataStream.available();
+                    lastLen = length - (startPos - tempPos);
+                    break;
+                case PduPart.P_DEP_COMMENT:
+                case PduPart.P_COMMENT:
+                    byte[] comment = parseWapString(pduDataStream, TYPE_TEXT_STRING);
+                    if ((null != comment) && (null != map)) {
+                        map.put(PduPart.P_COMMENT, comment);
+                    }
+
+                    tempPos = pduDataStream.available();
+                    lastLen = length - (startPos - tempPos);
+                    break;
+                case PduPart.P_DEP_DOMAIN:
+                case PduPart.P_DOMAIN:
+                    byte[] domain = parseWapString(pduDataStream, TYPE_TEXT_STRING);
+                    if ((null != domain) && (null != map)) {
+                        map.put(PduPart.P_DOMAIN, domain);
+                    }
+
+                    tempPos = pduDataStream.available();
+                    lastLen = length - (startPos - tempPos);
+                    break;
+                    /// @}
+
+
                 default:
                     if (LOCAL_LOGV) {
                         Log.v(LOG_TAG, "Not supported Content-Type parameter");
@@ -1617,6 +1766,7 @@ public class PduParser {
         int tempPos = 0;
         int lastLen = length;
         while(0 < lastLen) {
+            pduDataStream.mark(1);
             int header = pduDataStream.read();
             assert(-1 != header);
             lastLen--;
@@ -1650,6 +1800,26 @@ public class PduParser {
                         tempPos = pduDataStream.available();
                         lastLen = length - (startPos - tempPos);
                         break;
+                    /// M:Code analyze 007,add two new header fields,they are not support for google default @{
+                    case PduPart.P_X_WAP_CONTENT_URI:
+                        byte[] xWapContentUri = parseWapString(pduDataStream, TYPE_TEXT_STRING);
+                        if (null != xWapContentUri) {
+                            part.setXWapContentUri(xWapContentUri);
+                        }
+
+                        tempPos = pduDataStream.available();
+                        lastLen = length - (startPos - tempPos);
+
+                        break;
+                    case PduPart.P_DATE:
+                        long date = parseLongInteger(pduDataStream);
+                        date = System.currentTimeMillis() / 1000; //change date to local time
+                        part.setDate(date);
+
+                        tempPos = pduDataStream.available();
+                        lastLen = length - (startPos - tempPos);
+                        break;
+                    /// @}
                     case PduPart.P_DEP_CONTENT_DISPOSITION:
                     case PduPart.P_CONTENT_DISPOSITION:
                         /**
@@ -1720,14 +1890,67 @@ public class PduParser {
                 }
             } else if ((header >= TEXT_MIN) && (header <= TEXT_MAX)) {
                 // Not assigned header.
+                /// M:Code analyze 008,reset the location back to the marked location @{
+                pduDataStream.reset();
+                /// @}
                 byte[] tempHeader = parseWapString(pduDataStream, TYPE_TEXT_STRING);
                 byte[] tempValue = parseWapString(pduDataStream, TYPE_TEXT_STRING);
 
+                String unAssignedHeader = new String(tempHeader);
+
+                Log.i(LOG_TAG, "Got unknown header field: " + unAssignedHeader);
+
+                if (tempValue != null) {
+                    Log.i(LOG_TAG, "Got unknown header tempValue: " + new String(tempValue));
+                } else {
+                    Log.i(LOG_TAG, "tempValue is null ");
+                }
+
                 // Check the header whether it is "Content-Transfer-Encoding".
                 if (true ==
-                    PduPart.CONTENT_TRANSFER_ENCODING.equalsIgnoreCase(new String(tempHeader))) {
+                    PduPart.CONTENT_TRANSFER_ENCODING.equalsIgnoreCase(unAssignedHeader)) {
                     part.setContentTransferEncoding(tempValue);
                 }
+
+                /// M:Code analyze 009, Check the header whether it is "Content-Id",if yes,
+                /// set it into map @{
+                if (true ==
+                    PduPart.CONTENT_ID.equalsIgnoreCase(unAssignedHeader)) {
+                    if (null != tempValue) {
+                        part.setContentId(tempValue);
+                    }
+                }
+                /// @}
+
+                /// M:Code analyze 010, Check the header whether it is "Content-Location",
+                /// if yes,set it into map @{
+                if (true ==
+                    PduPart.CONTENT_LOCATION.equalsIgnoreCase(unAssignedHeader)) {
+                    if (null != tempValue) {
+                        part.setContentLocation(tempValue);
+                    }
+                }
+                /// @}
+
+                /// M:Code analyze 011,Check the header whether it is "Content-Disposition"
+                /// if yes,set it into map @{
+                if (true ==
+                    PduPart.CONTENT_DISPOSITION.equalsIgnoreCase(unAssignedHeader)) {
+                    if (null != tempValue) {
+                        part.setContentDisposition(tempValue);
+                    }
+                }
+                /// @}
+
+                /// M:Code analyze 012, Check the header whether it is "Name",if yes,
+                /// set it into map @{
+                if (true ==
+                    PduPart.PARA_NAME.equalsIgnoreCase(unAssignedHeader)) {
+                    if (null != tempValue) {
+                        part.setName(tempValue);
+                    }
+                }
+                /// @}
 
                 tempPos = pduDataStream.available();
                 lastLen = length - (startPos - tempPos);
@@ -1810,6 +2033,7 @@ public class PduParser {
         int mmsVersion = headers.getOctet(PduHeaders.MMS_VERSION);
         if (0 == mmsVersion) {
             // Every message should have Mms-Version field.
+            Log.i(LOG_TAG, "Parse MandatoryHeader Failed: PDU hasn't mmsVersion");
             return false;
         }
 
@@ -1819,32 +2043,38 @@ public class PduParser {
                 // Content-Type field.
                 byte[] srContentType = headers.getTextString(PduHeaders.CONTENT_TYPE);
                 if (null == srContentType) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_SEND_REQ PDU hasn't content type field");
                     return false;
                 }
 
                 // From field.
+                /*
                 EncodedStringValue srFrom = headers.getEncodedStringValue(PduHeaders.FROM);
                 if (null == srFrom) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_SEND_REQ PDU hasn't From field");
                     return false;
                 }
 
                 // Transaction-Id field.
                 byte[] srTransactionId = headers.getTextString(PduHeaders.TRANSACTION_ID);
                 if (null == srTransactionId) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_SEND_REQ PDU hasn't Transaction-Id field");
                     return false;
                 }
-
+*/
                 break;
             case PduHeaders.MESSAGE_TYPE_SEND_CONF:
                 // Response-Status field.
                 int scResponseStatus = headers.getOctet(PduHeaders.RESPONSE_STATUS);
                 if (0 == scResponseStatus) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_SEND_CONF PDU hasn't Response-Status field");
                     return false;
                 }
 
                 // Transaction-Id field.
                 byte[] scTransactionId = headers.getTextString(PduHeaders.TRANSACTION_ID);
                 if (null == scTransactionId) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_SEND_CONF PDU hasn't Transaction-Id field");
                     return false;
                 }
 
@@ -1853,30 +2083,35 @@ public class PduParser {
                 // Content-Location field.
                 byte[] niContentLocation = headers.getTextString(PduHeaders.CONTENT_LOCATION);
                 if (null == niContentLocation) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_NOTIFICATION_IND PDU hasn't Content-Location field");
                     return false;
                 }
 
                 // Expiry field.
                 long niExpiry = headers.getLongInteger(PduHeaders.EXPIRY);
                 if (-1 == niExpiry) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_NOTIFICATION_IND PDU hasn't Expiry field");
                     return false;
                 }
 
                 // Message-Class field.
                 byte[] niMessageClass = headers.getTextString(PduHeaders.MESSAGE_CLASS);
                 if (null == niMessageClass) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_NOTIFICATION_IND PDU hasn't Message-Class field");
                     return false;
                 }
 
                 // Message-Size field.
                 long niMessageSize = headers.getLongInteger(PduHeaders.MESSAGE_SIZE);
                 if (-1 == niMessageSize) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_NOTIFICATION_IND PDU hasn't Message-Size field");
                     return false;
                 }
 
                 // Transaction-Id field.
                 byte[] niTransactionId = headers.getTextString(PduHeaders.TRANSACTION_ID);
                 if (null == niTransactionId) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_NOTIFICATION_IND PDU hasn't Transaction-Id field");
                     return false;
                 }
 
@@ -1885,12 +2120,14 @@ public class PduParser {
                 // Status field.
                 int nriStatus = headers.getOctet(PduHeaders.STATUS);
                 if (0 == nriStatus) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_NOTIFYRESP_IND PDU hasn't Status field");
                     return false;
                 }
 
                 // Transaction-Id field.
                 byte[] nriTransactionId = headers.getTextString(PduHeaders.TRANSACTION_ID);
                 if (null == nriTransactionId) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_NOTIFYRESP_IND PDU hasn't Transaction-Id field");
                     return false;
                 }
 
@@ -1899,12 +2136,14 @@ public class PduParser {
                 // Content-Type field.
                 byte[] rcContentType = headers.getTextString(PduHeaders.CONTENT_TYPE);
                 if (null == rcContentType) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_RETRIEVE_CONF PDU hasn't Content-Type field");
                     return false;
                 }
 
                 // Date field.
                 long rcDate = headers.getLongInteger(PduHeaders.DATE);
                 if (-1 == rcDate) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_RETRIEVE_CONF PDU hasn't Date field");
                     return false;
                 }
 
@@ -1913,24 +2152,28 @@ public class PduParser {
                 // Date field.
                 long diDate = headers.getLongInteger(PduHeaders.DATE);
                 if (-1 == diDate) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_DELIVERY_IND PDU hasn't Date field");
                     return false;
                 }
 
                 // Message-Id field.
                 byte[] diMessageId = headers.getTextString(PduHeaders.MESSAGE_ID);
                 if (null == diMessageId) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_DELIVERY_IND PDU hasn't Message-Id field");
                     return false;
                 }
 
                 // Status field.
                 int diStatus = headers.getOctet(PduHeaders.STATUS);
                 if (0 == diStatus) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_DELIVERY_IND PDU hasn't Status field");
                     return false;
                 }
 
                 // To field.
                 EncodedStringValue[] diTo = headers.getEncodedStringValues(PduHeaders.TO);
                 if (null == diTo) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_DELIVERY_IND PDU hasn't To field");
                     return false;
                 }
 
@@ -1939,6 +2182,7 @@ public class PduParser {
                 // Transaction-Id field.
                 byte[] aiTransactionId = headers.getTextString(PduHeaders.TRANSACTION_ID);
                 if (null == aiTransactionId) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_ACKNOWLEDGE_IND PDU hasn't Transaction-Id field");
                     return false;
                 }
 
@@ -1947,30 +2191,35 @@ public class PduParser {
                 // Date field.
                 long roDate = headers.getLongInteger(PduHeaders.DATE);
                 if (-1 == roDate) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_READ_ORIG_IND PDU hasn't Date field");
                     return false;
                 }
 
                 // From field.
                 EncodedStringValue roFrom = headers.getEncodedStringValue(PduHeaders.FROM);
                 if (null == roFrom) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_READ_ORIG_IND PDU hasn't From field");
                     return false;
                 }
 
                 // Message-Id field.
                 byte[] roMessageId = headers.getTextString(PduHeaders.MESSAGE_ID);
                 if (null == roMessageId) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_READ_ORIG_IND PDU hasn't Message-Id field");
                     return false;
                 }
 
                 // Read-Status field.
                 int roReadStatus = headers.getOctet(PduHeaders.READ_STATUS);
                 if (0 == roReadStatus) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_READ_ORIG_IND PDU hasn't Read-Status field");
                     return false;
                 }
 
                 // To field.
                 EncodedStringValue[] roTo = headers.getEncodedStringValues(PduHeaders.TO);
                 if (null == roTo) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_READ_ORIG_IND PDU hasn't To field");
                     return false;
                 }
 
@@ -1979,33 +2228,50 @@ public class PduParser {
                 // From field.
                 EncodedStringValue rrFrom = headers.getEncodedStringValue(PduHeaders.FROM);
                 if (null == rrFrom) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_READ_REC_IND PDU hasn't From field");
                     return false;
                 }
 
                 // Message-Id field.
                 byte[] rrMessageId = headers.getTextString(PduHeaders.MESSAGE_ID);
                 if (null == rrMessageId) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_READ_REC_IND PDU hasn't Message-Id field");
                     return false;
                 }
 
                 // Read-Status field.
                 int rrReadStatus = headers.getOctet(PduHeaders.READ_STATUS);
                 if (0 == rrReadStatus) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_READ_REC_IND PDU hasn't Read-Status field");
                     return false;
                 }
 
                 // To field.
                 EncodedStringValue[] rrTo = headers.getEncodedStringValues(PduHeaders.TO);
                 if (null == rrTo) {
+                    Log.i(LOG_TAG, "Parse MandatoryHeader Failed: MESSAGE_TYPE_READ_REC_IND PDU hasn't To field");
                     return false;
                 }
 
                 break;
             default:
                 // Parser doesn't support this message type in this version.
+                Log.i(LOG_TAG, "Parse MandatoryHeader Failed: Parser doesn't support this message type in this version");
                 return false;
         }
 
         return true;
     }
+
+    /// M:Code analyze 002,Method for BackupRestore, for this application @{
+     /* 1.RetrieveConf's DATE should use the value from pdu instead of
+     *   setting system time directly
+     * 2.RetrivevConf's read status should use column "READ" in table pdu,
+     *   instead of "READ_STATUS" which is null in db*/
+    private boolean mForRestore = false;
+    public GenericPdu parse(boolean forRestore) {
+        mForRestore = forRestore;
+        return parse();
+    }
+    /// @}
 }

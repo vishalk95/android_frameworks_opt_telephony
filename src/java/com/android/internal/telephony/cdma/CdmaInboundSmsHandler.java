@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2013 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +23,7 @@ package com.android.internal.telephony.cdma;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.Resources;
 import android.os.Message;
 import android.os.SystemProperties;
@@ -29,12 +35,14 @@ import com.android.internal.telephony.CommandsInterface;
 import com.android.internal.telephony.InboundSmsHandler;
 import com.android.internal.telephony.InboundSmsTracker;
 import com.android.internal.telephony.PhoneBase;
+import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.SmsConstants;
 import com.android.internal.telephony.SmsMessageBase;
 import com.android.internal.telephony.SmsStorageMonitor;
 import com.android.internal.telephony.TelephonyProperties;
 import com.android.internal.telephony.WspTypeDecoder;
 import com.android.internal.telephony.cdma.sms.SmsEnvelope;
+import com.android.internal.util.BitwiseInputStream;
 
 import java.util.Arrays;
 
@@ -89,6 +97,15 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
     }
 
     /**
+     * Return whether the device is in Emergency Call Mode (only for 3GPP2).
+     * @return true if the device is in ECM; false otherwise
+     */
+    private static boolean isInEmergencyCallMode() {
+        String inEcm = SystemProperties.get(TelephonyProperties.PROPERTY_INECM_MODE, "false");
+        return "true".equals(inEcm);
+    }
+
+    /**
      * Return true if this handler is for 3GPP2 messages; false for 3GPP format.
      * @return true (3GPP2)
      */
@@ -104,6 +121,10 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
      */
     @Override
     protected int dispatchMessageRadioSpecific(SmsMessageBase smsb) {
+        if (isInEmergencyCallMode()) {
+            return Activity.RESULT_OK;
+        }
+
         SmsMessage sms = (SmsMessage) smsb;
         boolean isBroadcastType = (SmsEnvelope.MESSAGE_TYPE_BROADCAST == sms.getMessageType());
 
@@ -150,12 +171,18 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
                 return Intents.RESULT_SMS_HANDLED;
 
             case SmsEnvelope.TELESERVICE_WAP:
+            case SmsEnvelope.TELESERVICE_WAP_CT:
                 // handled below, after storage check
                 break;
 
-            case SmsEnvelope.TELESERVICE_CT_WAP:
-                // handled below, after TELESERVICE_WAP
-                break;
+            case SmsEnvelope.TELESERVICE_REG_SMS_CT:
+                log("send cdma reg message, mPhone.getSubId() = " + mPhone.getSubId());
+                Intent intent = new Intent(Intents.CDMA_REG_SMS_ACTION);
+                intent.putExtra("pdu", sms.getPdu());
+                intent.putExtra("format", "3gpp2");
+                intent.putExtra(PhoneConstants.SUBSCRIPTION_KEY, mPhone.getSubId());
+                mContext.sendBroadcast(intent);
+                return Intents.RESULT_SMS_HANDLED;
 
             default:
                 loge("unsupported teleservice 0x" + Integer.toHexString(teleService));
@@ -170,16 +197,29 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
             return Intents.RESULT_SMS_OUT_OF_MEMORY;
         }
 
-        if (SmsEnvelope.TELESERVICE_WAP == teleService) {
-            return processCdmaWapPdu(sms.getUserData(), sms.mMessageRef,
-                    sms.getOriginatingAddress(), sms.getTimestampMillis());
-        } else if (SmsEnvelope.TELESERVICE_CT_WAP == teleService) {
-            /* China Telecom WDP header contains Message identifier
-               and User data subparametrs extract these fields */
-            if (!sms.processCdmaCTWdpHeader(sms)) {
+        // / M: Add WAP_CT checking. @{
+        if (SmsEnvelope.TELESERVICE_WAP == teleService
+                || SmsEnvelope.TELESERVICE_WAP_CT == teleService) {
+            byte[] userData = null;
+            try {
+                BitwiseInputStream inStream = new BitwiseInputStream(sms.getUserData());
+                if (SmsEnvelope.TELESERVICE_WAP_CT == teleService) {
+                    inStream.skip(8 * 8 + 5);
+                }
+
+                int len = inStream.available() / 8;
+                userData = new byte[len];
+                for (int i = 0; i < len; i++) {
+                    userData[i] = (byte) inStream.read(8);
+                }
+            } catch (BitwiseInputStream.AccessException ex) {
+                loge("process wap pdu fail");
+            }
+            if (userData == null || (userData != null && userData.length == 0)) {
+                log("Received a empty WAPPUSH . Discard.");
                 return Intents.RESULT_SMS_HANDLED;
             }
-            return processCdmaWapPdu(sms.getUserData(), sms.mMessageRef,
+            return processCdmaWapPdu(userData, sms.mMessageRef,
                     sms.getOriginatingAddress(), sms.getTimestampMillis());
         }
 
@@ -194,6 +234,10 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
      */
     @Override
     protected void acknowledgeLastIncomingSms(boolean success, int result, Message response) {
+        if (isInEmergencyCallMode()) {
+            return;
+        }
+
         int causeCode = resultToCause(result);
         mPhone.mCi.acknowledgeLastIncomingCdmaSms(success, causeCode, response);
 

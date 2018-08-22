@@ -102,6 +102,13 @@ public class DcTesterFailBringUpAll {
         return mFailBringUp;
     }
 
+    // M: [C2K][IRAT] Update phone for test class. @{
+    void updatePhone(PhoneBase phone) {
+        log("DcTesterFailBringUpAll: updatePhone");
+        mPhone = phone;
+    }
+    // M: }@
+
     private void log(String s) {
         Rlog.d(LOG_TAG, s);
     }

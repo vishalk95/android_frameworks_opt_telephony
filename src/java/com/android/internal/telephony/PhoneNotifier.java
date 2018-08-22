@@ -18,6 +18,7 @@ package com.android.internal.telephony;
 
 import android.telephony.CellInfo;
 import android.telephony.DataConnectionRealTimeInfo;
+import android.telephony.ServiceState;
 import android.telephony.VoLteServiceState;
 
 import java.util.List;
@@ -49,6 +50,14 @@ public interface PhoneNotifier {
 
     public void notifyOtaspChanged(Phone sender, int otaspMode);
 
+    // M: [LTE][Low Power][UL traffic shaping] Start
+    public void notifyLteAccessStratumChanged(Phone sender, String state);
+
+    public void notifyPsNetworkTypeChanged(Phone sender, int nwType);
+
+    public void notifySharedDefaultApnStateChanged(Phone sender, boolean isSharedDefaultApn);
+    // M: [LTE][Low Power][UL traffic shaping] End
+
     public void notifyCellInfo(Phone sender, List<CellInfo> cellInfo);
 
     public void notifyPreciseCallState(Phone sender);
@@ -63,4 +72,13 @@ public interface PhoneNotifier {
     public void notifyVoLteServiceStateChanged(Phone sender, VoLteServiceState lteState);
 
     public void notifyOemHookRawEventForSubscriber(int subId, byte[] rawData);
+
+    ///M: Add for SVLTE
+    /**
+     * Notify the Service state change for svlte.
+     * @param sender The phone to notify service state change
+     * @param svlteServiceState The svlte service state will be notified.
+     */
+    public void notifySvlteServiceStateChanged(Phone sender,
+            ServiceState svlteServiceState);
 }

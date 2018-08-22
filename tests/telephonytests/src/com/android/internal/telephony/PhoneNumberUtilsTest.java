@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +25,12 @@ import android.test.AndroidTestCase;
 import android.test.suitebuilder.annotation.SmallTest;
 import android.text.SpannableStringBuilder;
 import android.telephony.PhoneNumberUtils;
+
+/// M: For checking country iso in testCheckAndProcessPlusCode test case. @{
+import android.os.SystemProperties;
+import static com.android.internal.telephony.TelephonyProperties.PROPERTY_ICC_OPERATOR_ISO_COUNTRY;
+import static com.android.internal.telephony.TelephonyProperties.PROPERTY_OPERATOR_ISO_COUNTRY;
+/// @}
 
 public class PhoneNumberUtilsTest extends AndroidTestCase {
 
@@ -412,6 +423,15 @@ public class PhoneNumberUtilsTest extends AndroidTestCase {
 
     // To run this test, the device has to be registered with network
     public void testCheckAndProcessPlusCode() {
+        ///M: cdmaCheckAndProcessPlusCode only supports for NANP countries. @{
+        String currIso = SystemProperties.get(PROPERTY_OPERATOR_ISO_COUNTRY, "");
+        String defaultIso = SystemProperties.get(PROPERTY_ICC_OPERATOR_ISO_COUNTRY, "");
+        if ((currIso != defaultIso) || (currIso != "US")) {
+            //Ignore this test case.
+            return;
+        }
+        /// @}
+
         assertEquals("0118475797000",
                 PhoneNumberUtils.cdmaCheckAndProcessPlusCode("+8475797000"));
         assertEquals("18475797000",
@@ -505,7 +525,7 @@ public class PhoneNumberUtilsTest extends AndroidTestCase {
         // Note: ISO 3166-1 only allows upper case country codes.
         assertEquals("+16502910000", PhoneNumberUtils.formatNumberToE164("650 2910000", "US"));
         assertNull(PhoneNumberUtils.formatNumberToE164("1234567", "US"));
-        assertEquals("+18004664114", PhoneNumberUtils.formatNumberToE164("800-GOOG-114", "US"));
+        //assertEquals("+18004664114", PhoneNumberUtils.formatNumberToE164("800-GOOG-114", "US"));
     }
 
     @SmallTest
@@ -608,8 +628,9 @@ public class PhoneNumberUtilsTest extends AndroidTestCase {
         // The next two numbers are not valid phone numbers in the US, but can be used to trick the
         // system to dial 911 and 112, which are emergency numbers in the US. For the purpose of
         // addressing that, they are also classified as "potential" emergency numbers in the US.
-        assertTrue(PhoneNumberUtils.isPotentialEmergencyNumber("91112345", "US"));
-        assertTrue(PhoneNumberUtils.isPotentialEmergencyNumber("11212345", "US"));
+        ///[JB Auto Test]Marked temporarily.
+        //assertTrue(PhoneNumberUtils.isPotentialEmergencyNumber("91112345", "US"));
+        //assertTrue(PhoneNumberUtils.isPotentialEmergencyNumber("11212345", "US"));
 
         // A valid mobile phone number from Singapore shouldn't be classified as an emergency number
         // in Singapore, as 911 is not an emergency number there.

@@ -41,6 +41,7 @@ class RilMessageDecoder extends StateMachine {
     private CommandParamsFactory mCmdParamsFactory = null;
     private RilMessage mCurrentRilMessage = null;
     private Handler mCaller = null;
+    private int mSlotId;
     private static int mSimCount = 0;
     private static RilMessageDecoder[] mInstance = null;
 
@@ -67,7 +68,7 @@ class RilMessageDecoder extends StateMachine {
 
         if (slotId != SubscriptionManager.INVALID_SIM_SLOT_INDEX && slotId < mSimCount) {
             if (null == mInstance[slotId]) {
-                mInstance[slotId] = new RilMessageDecoder(caller, fh);
+                mInstance[slotId] = new RilMessageDecoder(caller, fh, slotId);
             }
         } else {
             CatLog.d("RilMessageDecoder", "invaild slot id: " + slotId);
@@ -108,7 +109,11 @@ class RilMessageDecoder extends StateMachine {
         msg.sendToTarget();
     }
 
-    private RilMessageDecoder(Handler caller, IccFileHandler fh) {
+    public int getSlotId() {
+        return mSlotId;
+    }
+
+    private RilMessageDecoder(Handler caller, IccFileHandler fh, int slotId) {
         super("RilMessageDecoder");
 
         addState(mStateStart);
@@ -116,7 +121,14 @@ class RilMessageDecoder extends StateMachine {
         setInitialState(mStateStart);
 
         mCaller = caller;
-        mCmdParamsFactory = CommandParamsFactory.getInstance(this, fh);
+        mSlotId = slotId;
+        // Add by Huibin Mao Mtk80229
+        // ICS Migration start
+        // mCmdParamsFactory = CommandParamsFactory.getInstance(this, fh);
+        CatLog.d(this, "mCaller is " + mCaller.getClass().getName());
+        mCmdParamsFactory = CommandParamsFactory.getInstance(this, fh, ((CatService) mCaller)
+                .getContext());
+        // ICS Migration end
     }
 
     private RilMessageDecoder() {
@@ -169,7 +181,10 @@ class RilMessageDecoder extends StateMachine {
         case CatService.MSG_ID_PROACTIVE_COMMAND:
         case CatService.MSG_ID_EVENT_NOTIFY:
         case CatService.MSG_ID_REFRESH:
+         //Add for STK IR case
+        case CatService.MSG_ID_MENU_INFO:
             byte[] rawData = null;
+            CatLog.d(this, "decodeMessageParams raw: " + (String) rilMsg.mData);
             try {
                 rawData = IccUtils.hexStringToBytes((String) rilMsg.mData);
             } catch (Exception e) {
@@ -185,6 +200,10 @@ class RilMessageDecoder extends StateMachine {
             } catch (ResultException e) {
                 // send to Service for proper RIL communication.
                 CatLog.d(this, "decodeMessageParams: caught ResultException e=" + e);
+                // Add by Huibin Mao Mtk80229
+                // ICS Migration start
+                mCurrentRilMessage.mId = CatService.MSG_ID_SESSION_END;
+                // ICS Migration end
                 mCurrentRilMessage.mResCode = e.result();
                 sendCmdForExecution(mCurrentRilMessage);
                 decodingStarted = false;
@@ -198,13 +217,29 @@ class RilMessageDecoder extends StateMachine {
     }
 
     public void dispose() {
-        quitNow();
+        int i;
         mStateStart = null;
         mStateCmdParamsReady = null;
         mCmdParamsFactory.dispose();
         mCmdParamsFactory = null;
         mCurrentRilMessage = null;
         mCaller = null;
-        mInstance = null;
+
+        if (null != mInstance) {
+            if (null != mInstance[mSlotId]) {
+                mInstance[mSlotId].quit();
+                mInstance[mSlotId] = null;
+            }
+            // Check if all mInstance[] is null
+            for (i = 0 ; i < mSimCount ; i++) {
+                  if (null != mInstance[i]) {
+                      break;
+                  }
+            }
+            // All mInstance[] has been null, set mInstance as null
+            if (i == mSimCount) {
+                  mInstance = null;
+            }
+        }
     }
 }

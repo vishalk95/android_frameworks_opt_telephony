@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -136,12 +141,18 @@ public final class CdmaCall extends Call {
         boolean changed = false;
 
         newState = stateFromDCState(dc.state);
-
+        /// M: Update state except old state is disconnecting and new state is incoming. @{
+        android.telephony.Rlog.d("CdmaCall", "update newState = " + newState
+                                + ", oldState = " + mState);
         if (newState != mState) {
-            mState = newState;
-            changed = true;
+            if (!(mState == State.DISCONNECTING && newState == State.INCOMING) &&
+                !(mState == State.DISCONNECTING && newState == State.DIALING)) {
+                mState = newState;
+                changed = true;
+            }
         }
-
+        android.telephony.Rlog.d("CdmaCall", "update changed = " + changed);
+        /// @}
         return changed;
     }
 

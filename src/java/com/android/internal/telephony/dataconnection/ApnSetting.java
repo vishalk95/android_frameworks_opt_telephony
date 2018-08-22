@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,18 +29,21 @@ import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.RILConstants;
 import com.android.internal.telephony.uicc.IccRecords;
 
+import com.mediatek.common.telephony.IApnSetting;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
 /**
- * This class represents a apn setting for create PDP link
+ * This class represents a apn setting for create PDP link.
  */
-public class ApnSetting {
+public class ApnSetting implements IApnSetting {
+    private static final String LOG_TAG = "DCT";
+    private static final boolean DBG = true;
 
     static final String V2_FORMAT_REGEX = "^\\[ApnSettingV2\\]\\s*";
     static final String V3_FORMAT_REGEX = "^\\[ApnSettingV3\\]\\s*";
-    static final String TAG = "ApnSetting";
 
     public final String carrier;
     public final String apn;
@@ -47,7 +55,7 @@ public class ApnSetting {
     public final String user;
     public final String password;
     public final int authType;
-    public String[] types;
+    public final String[] types;
     public final int id;
     public final String numeric;
     public final String protocol;
@@ -105,23 +113,23 @@ public class ApnSetting {
             int bearerBitmask, int profileId, boolean modemCognitive, int maxConns, int waitTime,
             int maxConnsTime, int mtu, String mvnoType, String mvnoMatchData) {
         this.id = id;
-        this.numeric = numeric;
-        this.carrier = carrier;
-        this.apn = apn;
-        this.proxy = proxy;
-        this.port = port;
-        this.mmsc = mmsc;
-        this.mmsProxy = mmsProxy;
-        this.mmsPort = mmsPort;
-        this.user = user;
-        this.password = password;
+        this.numeric = numeric == null ? "" : numeric;
+        this.carrier = carrier == null ? "" : carrier;
+        this.apn = apn == null ? "" : apn;
+        this.proxy = proxy == null ? "" : proxy;
+        this.port = port == null ? "" : port;
+        this.mmsc = mmsc == null ? "" : mmsc;
+        this.mmsProxy = mmsProxy == null ? "" : mmsProxy;
+        this.mmsPort = mmsPort == null ? "" : mmsPort;
+        this.user = user == null ? "" : user;
+        this.password = password == null ? "" : password;
         this.authType = authType;
         this.types = new String[types.length];
         for (int i = 0; i < types.length; i++) {
-            this.types[i] = types[i].toLowerCase(Locale.ROOT);
+            this.types[i] = types[i] == null ? "" : types[i].toLowerCase(Locale.ROOT);
         }
-        this.protocol = protocol;
-        this.roamingProtocol = roamingProtocol;
+        this.protocol = protocol == null ? "" : protocol;
+        this.roamingProtocol = roamingProtocol == null ? "" : roamingProtocol;
         this.carrierEnabled = carrierEnabled;
         this.bearer = bearer;
         this.bearerBitmask = (bearerBitmask | ServiceState.getBitmaskForTech(bearer));
@@ -131,8 +139,8 @@ public class ApnSetting {
         this.waitTime = waitTime;
         this.maxConnsTime = maxConnsTime;
         this.mtu = mtu;
-        this.mvnoType = mvnoType;
-        this.mvnoMatchData = mvnoMatchData;
+        this.mvnoType = mvnoType == null ? "" : mvnoType;
+        this.mvnoMatchData = mvnoMatchData == null ? "" : mvnoMatchData;
 
     }
 
@@ -192,7 +200,8 @@ public class ApnSetting {
         }
 
         String[] typeArray;
-        String protocol, roamingProtocol;
+        String protocol;
+        String roamingProtocol;
         boolean carrierEnabled;
         int bearerBitmask = 0;
         int profileId = 0;
@@ -228,12 +237,14 @@ public class ApnSetting {
                     waitTime = Integer.parseInt(a[21]);
                     maxConnsTime = Integer.parseInt(a[22]);
                 } catch (NumberFormatException e) {
+                    Log.e(LOG_TAG, "profileId...etc parse NumberFormatException");
                 }
             }
             if (a.length > 23) {
                 try {
                     mtu = Integer.parseInt(a[23]);
                 } catch (NumberFormatException e) {
+                    Log.e(LOG_TAG, "mtu parse NumberFormatException");
                 }
             }
             if (a.length > 25) {
@@ -317,14 +328,33 @@ public class ApnSetting {
     public boolean canHandleType(String type) {
         if (!carrierEnabled) return false;
         for (String t : types) {
-            // DEFAULT handles all, and HIPRI is handled by DEFAULT
-            if (t.equalsIgnoreCase(type) ||
-                    t.equalsIgnoreCase(PhoneConstants.APN_TYPE_ALL) ||
-                    (t.equalsIgnoreCase(PhoneConstants.APN_TYPE_DEFAULT) &&
-                    type.equalsIgnoreCase(PhoneConstants.APN_TYPE_HIPRI))) {
-                return true;
+            Log.d(LOG_TAG, "canHandleType(): entry in types=" + t + ", reqType=" + type);
+            if (type.equalsIgnoreCase(PhoneConstants.APN_TYPE_DUN)) {
+                if (t.equalsIgnoreCase(PhoneConstants.APN_TYPE_TETHERING)
+                    || t.equalsIgnoreCase(PhoneConstants.APN_TYPE_DUN)) {
+                    if (types.length == 1) {
+                        Log.d(LOG_TAG, "canHandleType(): use TETHERING for HIPRI type");
+                        return true;
+                    } else {
+                        Log.d(LOG_TAG, "canHandleType(): not TETHERING only APN settings");
+                        return false;
+                    }
+                }
+            } else {
+                if (t.equalsIgnoreCase(type) ||
+                    (t.equalsIgnoreCase(PhoneConstants.APN_TYPE_ALL) &&
+                      !(type.equalsIgnoreCase(PhoneConstants.APN_TYPE_IMS) ||
+                       type.equalsIgnoreCase(PhoneConstants.APN_TYPE_EMERGENCY)))) {
+                       // M: Let the apn *  skip the "IMS" & "EMERGENCY" apn
+                    return true;
+                } else if (t.equalsIgnoreCase(PhoneConstants.APN_TYPE_DEFAULT)
+                            && type.equalsIgnoreCase(PhoneConstants.APN_TYPE_HIPRI)) {
+                    Log.d(LOG_TAG, "canHandleType(): use DEFAULT for HIPRI type");
+                    return true;
+                }
             }
         }
+
         return false;
     }
 
@@ -370,20 +400,7 @@ public class ApnSetting {
                     gid1.substring(0, mvno_match_data_length).equalsIgnoreCase(mvnoMatchData)) {
                 return true;
             }
-        } else if (mvnoType.equalsIgnoreCase("iccid")) {
-            String iccId = r.getIccId();
-            if (iccId != null) {
-                String[] mvnoIccidList = mvnoMatchData.split(",");
-                for (String mvnoIccid : mvnoIccidList) {
-                    Log.d(TAG, "mvnoIccid: " + mvnoIccid);
-                    if (iccId.startsWith(mvnoIccid)) {
-                        Log.d(TAG, "mvno icc id match found");
-                        return true;
-                    }
-                }
-            }
         }
-
         return false;
     }
 
@@ -393,5 +410,41 @@ public class ApnSetting {
     public boolean equals(Object o) {
         if (o instanceof ApnSetting == false) return false;
         return (toString().equals(o.toString()));
+    }
+
+    /** M: get APN string except name since we do not care about it. */
+    public String toStringIgnoreName() {
+        StringBuilder sb = new StringBuilder();
+        sb.append(id)
+        .append(", ").append(numeric)
+        .append(", ").append(apn)
+        .append(", ").append(proxy)
+        .append(", ").append(mmsc)
+        .append(", ").append(mmsProxy)
+        .append(", ").append(mmsPort)
+        .append(", ").append(port)
+        .append(", ").append(authType).append(", ");
+        for (int i = 0; i < types.length; i++) {
+            sb.append(types[i]);
+            if (i < types.length - 1) {
+                sb.append(" | ");
+            }
+        }
+        sb.append(", ").append(protocol);
+        sb.append(", ").append(roamingProtocol);
+        sb.append(", ").append(carrierEnabled);
+        sb.append(", ").append(bearer);
+        return sb.toString();
+    }
+
+    static public String toStringIgnoreNameForList(List<ApnSetting> apnSettings) {
+        if (apnSettings == null || apnSettings.size() == 0) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (ApnSetting t : apnSettings) {
+            sb.append(t.toStringIgnoreName());
+        }
+        return sb.toString();
     }
 }

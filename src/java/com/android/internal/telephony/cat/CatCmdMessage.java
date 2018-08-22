@@ -34,13 +34,10 @@ public class CatCmdMessage implements Parcelable {
     private ToneSettings mToneSettings = null;
     private CallSettings mCallSettings = null;
     private SetupEventListSettings mSetupEventListSettings = null;
-    private boolean mLoadIconFailed = false;
+    public int mInfoType = 0;
+    public String mDestAddress = null;
 
-    // Command Qualifier values for refresh command
-    static final int REFRESH_NAA_INIT_AND_FULL_FILE_CHANGE  = 0x00;
-    static final int REFRESH_NAA_INIT_AND_FILE_CHANGE       = 0x02;
-    static final int REFRESH_NAA_INIT                       = 0x03;
-    static final int REFRESH_UICC_RESET                     = 0x04;
+
     /*
      * Container for Launch Browser command settings.
      */
@@ -68,7 +65,10 @@ public class CatCmdMessage implements Parcelable {
         public static final int LANGUAGE_SELECTION_EVENT     = 0x07;
         public static final int BROWSER_TERMINATION_EVENT    = 0x08;
         public static final int BROWSING_STATUS_EVENT        = 0x0F;
-        public static final int HCI_CONNECTIVITY_EVENT       = 0x13;
+        /// M: BIP {
+        public static final int DATA_AVAILABLE_EVENT         = 0x09;
+        public static final int CHANNEL_STATUS_EVENT         = 0x0A;
+        /// M: BIP }
     }
 
     public final class BrowserTerminationCauses {
@@ -78,7 +78,6 @@ public class CatCmdMessage implements Parcelable {
 
     CatCmdMessage(CommandParams cmdParams) {
         mCmdDet = cmdParams.mCmdDet;
-        mLoadIconFailed =  cmdParams.mLoadIconFailed;
         switch(getCmdType()) {
         case SET_UP_MENU:
         case SELECT_ITEM:
@@ -88,7 +87,6 @@ public class CatCmdMessage implements Parcelable {
         case SET_UP_IDLE_MODE_TEXT:
         case SEND_DTMF:
         case SEND_SMS:
-        case REFRESH:
         case SEND_SS:
         case SEND_USSD:
             mTextMsg = ((DisplayTextParams) cmdParams).mTextMsg;
@@ -123,12 +121,27 @@ public class CatCmdMessage implements Parcelable {
             BIPClientParams param = (BIPClientParams) cmdParams;
             mTextMsg = param.mTextMsg;
             break;
-        case SET_UP_EVENT_LIST:
-            mSetupEventListSettings = new SetupEventListSettings();
-            mSetupEventListSettings.eventList = ((SetEventListParams) cmdParams).mEventInfo;
+        case REFRESH:
+            mTextMsg = ((DisplayTextParams) cmdParams).mTextMsg;
             break;
-        case ACTIVATE:
+        case SET_UP_EVENT_LIST:
+            // TODO : Apply AOPS mSetupEventListSettings
+            mSetupEventListSettings = new SetupEventListSettings();
+            SetupEventListParams mEventParams = (SetupEventListParams)cmdParams;
+            int length = mEventParams.eventList.length;
+            mSetupEventListSettings.eventList = new int[length];
+            for (int i = 0 ;i< length; i++) {
+                mSetupEventListSettings.eventList[i] = mEventParams.eventList[i] & 0xff;
+            }
+            //mSetupEventListSettings.eventList = ((SetEventListParams) cmdParams).mEventInfo;
+            break;
         case PROVIDE_LOCAL_INFORMATION:
+            break;
+        case CALLCTRL_RSP_MSG:
+            mTextMsg = ((CallCtrlBySimParams) cmdParams).mTextMsg;
+            mInfoType = ((CallCtrlBySimParams) cmdParams).mInfoType;
+            mDestAddress = ((CallCtrlBySimParams) cmdParams).mDestAddress;
+            break;
         default:
             break;
         }
@@ -139,7 +152,6 @@ public class CatCmdMessage implements Parcelable {
         mTextMsg = in.readParcelable(null);
         mMenu = in.readParcelable(null);
         mInput = in.readParcelable(null);
-        mLoadIconFailed = (in.readByte() == 1);
         switch (getCmdType()) {
         case LAUNCH_BROWSER:
             mBrowserSettings = new BrowserSettings();
@@ -173,7 +185,6 @@ public class CatCmdMessage implements Parcelable {
         dest.writeParcelable(mTextMsg, 0);
         dest.writeParcelable(mMenu, 0);
         dest.writeParcelable(mInput, 0);
-        dest.writeByte((byte) (mLoadIconFailed ? 1 : 0));
         switch(getCmdType()) {
         case LAUNCH_BROWSER:
             dest.writeString(mBrowserSettings.url);
@@ -212,6 +223,14 @@ public class CatCmdMessage implements Parcelable {
     }
 
     /* external API to be used by application */
+    /**
+     * Return command qualifier
+     * @internal
+     */
+    public int getCmdQualifier() {
+        return mCmdDet.commandQualifier;
+    }
+
     public AppInterface.CommandType getCmdType() {
         return AppInterface.CommandType.fromInt(mCmdDet.typeOfCommand);
     }
@@ -242,24 +261,5 @@ public class CatCmdMessage implements Parcelable {
 
     public SetupEventListSettings getSetEventList() {
         return mSetupEventListSettings;
-    }
-
-    /**
-     * API to be used by application to check if loading optional icon
-     * has failed
-     */
-    public boolean hasIconLoadFailed() {
-        return mLoadIconFailed;
-    }
-
-    public boolean isRefreshResetOrInit() {
-        if ((mCmdDet.commandQualifier == REFRESH_NAA_INIT_AND_FULL_FILE_CHANGE)
-            || (mCmdDet.commandQualifier == REFRESH_NAA_INIT_AND_FILE_CHANGE )
-            || (mCmdDet.commandQualifier == REFRESH_NAA_INIT)
-            || (mCmdDet.commandQualifier == REFRESH_UICC_RESET)) {
-            return true;
-        } else {
-            return false;
-        }
     }
 }

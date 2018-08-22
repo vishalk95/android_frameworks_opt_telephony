@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2007 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,12 +27,23 @@ import android.app.AppOpsManager;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Binder;
+// MTK-START
+import android.os.Message;
+// MTK-END
 import android.telephony.PhoneNumberUtils;
 import android.telephony.Rlog;
 
 import com.android.internal.telephony.uicc.IsimRecords;
 import com.android.internal.telephony.uicc.UiccCard;
 import com.android.internal.telephony.uicc.UiccCardApplication;
+// MTK-START
+import com.android.internal.telephony.uicc.UiccController;
+import com.android.internal.telephony.uicc.UsimServiceTable;
+import com.android.internal.telephony.uicc.IccRecords;
+
+import com.mediatek.common.mom.MobileManagerUtils;
+import com.mediatek.common.mom.SubPermissions;
+// MTK-END
 
 public class PhoneSubInfo {
     static final String LOG_TAG = "PhoneSubInfo";
@@ -44,6 +60,10 @@ public class PhoneSubInfo {
         android.Manifest.permission.CALL_PRIVILEGED;
     private static final String READ_PRIVILEGED_PHONE_STATE =
         android.Manifest.permission.READ_PRIVILEGED_PHONE_STATE;
+    // MTK-START
+    private static final String MODIFY_PHONE_STATE =
+        android.Manifest.permission.MODIFY_PHONE_STATE;
+    // MTK-START
 
     public PhoneSubInfo(Phone phone) {
         mPhone = phone;
@@ -71,6 +91,17 @@ public class PhoneSubInfo {
         if (!checkReadPhoneState(callingPackage, "getDeviceId")) {
             return null;
         }
+        // MTK-START
+        // Check permission for Mobile Manager Service/Application
+        if (MobileManagerUtils.isSupported()) {
+            log("Try to get IMEI");
+            if (!MobileManagerUtils.checkPermission(SubPermissions.READ_PHONE_IMEI, Binder.getCallingUid())) {
+                log("MoMS permission READ_PHONE_IMEI denied");
+                return "";
+            }
+            log("Get IMEI permission granted");
+        }
+        // MTK-END
         return mPhone.getDeviceId();
     }
 
@@ -342,6 +373,169 @@ public class PhoneSubInfo {
 
         return uiccApp.getIccRecords().getIccSimChallengeResponse(authContext, data);
     }
+
+    // MTK-START
+    /**
+     * Returns the GBA bootstrapping parameters (GBABP) that was loaded from the ISIM.
+     * @return GBA bootstrapping parameters or null if not present or not loaded
+     */
+    public String getIsimGbabp() {
+        mContext.enforceCallingOrSelfPermission(READ_PRIVILEGED_PHONE_STATE,
+                "Requires READ_PRIVILEGED_PHONE_STATE");
+        IsimRecords isim = mPhone.getIsimRecords();
+        if (isim != null) {
+            return isim.getIsimGbabp();
+        } else {
+            return null;
+        }
+    }
+
+    /**
+     * Set the GBA bootstrapping parameters (GBABP) value into the ISIM.
+     * @param gbabp a GBA bootstrapping parameters value in String type
+     * @param onComplete
+     *        onComplete.obj will be an AsyncResult
+     *        ((AsyncResult)onComplete.obj).exception == null on success
+     *        ((AsyncResult)onComplete.obj).exception != null on fail
+     */
+    public void setIsimGbabp(String gbabp, Message onComplete) {
+        // FIXME: write permission?
+        mContext.enforceCallingOrSelfPermission(READ_PRIVILEGED_PHONE_STATE,
+                "Requires READ_PRIVILEGED_PHONE_STATE");
+        IsimRecords isim = mPhone.getIsimRecords();
+        if (isim != null) {
+            isim.setIsimGbabp(gbabp, onComplete);
+        }
+    }
+
+    /**
+     * Returns the USIM Service Table (UST) that was loaded from the USIM.
+     * @param service service index on UST
+     * @return the indicated service is supported or not
+     */
+    public boolean getUsimService(int service) {
+        mContext.enforceCallingOrSelfPermission(READ_PHONE_STATE, "Requires READ_PHONE_STATE");
+        UsimServiceTable ust = mPhone.getUsimServiceTable();
+        if (ust != null) {
+            return ust.isAvailable(service);
+        } else {
+            log("getUsimService fail due to UST is null.");
+            return false;
+        }
+    }
+
+    private IccRecords getIccRecords() {
+        UiccCard uiccCard = mPhone.getUiccCard();
+        UiccCardApplication uiccApp = ((uiccCard != null)
+                ? uiccCard.getApplication(UiccController.APP_FAM_3GPP) : null);
+        IccRecords iccRecords = ((uiccApp != null) ? uiccApp.getIccRecords() : null);
+
+        return iccRecords;
+    }
+
+    /**
+     * Returns the GBA bootstrapping parameters (GBABP) that was loaded from the USIM.
+     * @return GBA bootstrapping parameters or null if not present or not loaded
+     */
+    public String getUsimGbabp() {
+        mContext.enforceCallingOrSelfPermission(READ_PHONE_STATE, "Requires READ_PHONE_STATE");
+
+        IccRecords iccRecords = getIccRecords();
+
+        if (iccRecords != null) {
+            return iccRecords.getEfGbabp();
+        } else {
+            log("getUsimGbabp fail due to IccRecords is null.");
+            return null;
+        }
+     }
+
+    /**
+     * Set the GBA bootstrapping parameters (GBABP) value into the USIM.
+     * @param gbabp a GBA bootstrapping parameters value in String type
+     * @param onComplete
+     *        onComplete.obj will be an AsyncResult
+     *        ((AsyncResult)onComplete.obj).exception == null on success
+     *        ((AsyncResult)onComplete.obj).exception != null on fail
+     */
+    public void setUsimGbabp(String gbabp, Message onComplete) {
+        mContext.enforceCallingOrSelfPermission(MODIFY_PHONE_STATE, "Requires READ_PHONE_STATE");
+
+        IccRecords iccRecords = getIccRecords();
+
+        if (iccRecords != null) {
+            iccRecords.setEfGbabp(gbabp, onComplete);
+        } else {
+            log("setUsimGbabp fail due to IccRecords is null.");
+        }
+    }
+
+    /**
+     * Returns the Public Service Identity of the SM-SC (PSISMSC) that was loaded from the ISIM.
+     * @return PSISMSC or null if not present or not loaded
+     */
+    public byte[] getIsimPsismsc() {
+        mContext.enforceCallingOrSelfPermission(READ_PRIVILEGED_PHONE_STATE,
+                "Requires READ_PRIVILEGED_PHONE_STATE");
+        IsimRecords isim = mPhone.getIsimRecords();
+        if (isim != null) {
+            return isim.getEfPsismsc();
+        } else {
+            return null;
+        }
+    }
+
+    /**
+     * Returns the Public Service Identity of the SM-SC (PSISMSC) that was loaded from the USIM.
+     * @return PSISMSC or null if not present or not loaded
+     */
+    public byte[] getUsimPsismsc() {
+        mContext.enforceCallingOrSelfPermission(READ_PHONE_STATE, "Requires READ_PHONE_STATE");
+
+        IccRecords iccRecords = getIccRecords();
+
+        if (iccRecords != null) {
+            return iccRecords.getEfPsismsc();
+        } else {
+            log("getUsimPsismsc fail due to IccRecords is null.");
+            return null;
+        }
+    }
+
+    /**
+     * Returns the Short message parameter (SMSP) that was loaded from the USIM.
+     * @return PSISMSC or null if not present or not loaded
+     */
+    public byte[] getUsimSmsp() {
+        mContext.enforceCallingOrSelfPermission(READ_PHONE_STATE, "Requires READ_PHONE_STATE");
+
+        IccRecords iccRecords = getIccRecords();
+
+        if (iccRecords != null) {
+            return iccRecords.getEfSmsp();
+        } else {
+            log("getUsimSmsp fail due to IccRecords is null.");
+            return null;
+        }
+    }
+
+    /**
+     * Returns the MCC+MNC length that was loaded from the USIM.
+     * @return MCC+MNC length or 0 if not present or not loaded
+     */
+    public int getMncLength() {
+        mContext.enforceCallingOrSelfPermission(READ_PHONE_STATE, "Requires READ_PHONE_STATE");
+
+        IccRecords iccRecords = getIccRecords();
+
+        if (iccRecords != null) {
+            return iccRecords.getMncLength();
+        } else {
+            log("getMncLength fail due to IccRecords is null.");
+            return 0;
+        }
+    }
+    // MTK-END
 
     private void log(String s) {
         Rlog.d(LOG_TAG, s);

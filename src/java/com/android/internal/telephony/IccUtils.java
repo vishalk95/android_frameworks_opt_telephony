@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -525,4 +530,149 @@ public class IccUtils {
         } while (valueIndex < endIndex);
         return result;
     }
+
+    // Added by M begin
+    /**
+     * Many fields in GSM SIM's are stored as nibble-swizzled BCD
+     *
+     * Assumes 0xf as normal value .
+     *
+     *  returning string
+     */
+    public static String
+    parseIccIdToString(byte[] data, int offset, int length) {
+        StringBuilder ret = new StringBuilder(length * 2);
+
+        for (int i = offset ; i < offset + length ; i++) {
+            byte b;
+            int v;
+
+            v = data[i] & 0xf;
+            if (0 <= v && v <= 9) {
+                ret.append((char) ('0' + v));
+            } else {
+                ret.append((char) ('a' + v - 0xa));
+            }
+
+            v = (data[i] >> 4) & 0xf;
+            if (0 <= v && v <= 9) {
+                ret.append((char) ('0' + v));
+            } else {
+                ret.append((char) ('a' + v - 0xa));
+            }
+        }
+
+        return ret.toString();
+    }
+
+    public static String
+       parsePlmnToStringForEfOpl(byte[] data, int offset, int length) {
+
+        StringBuilder ret = new StringBuilder(length * 2);
+        int v;
+
+        do {
+            v = data[offset] & 0xf;
+            if (v >= 0 && v <= 9)
+                ret.append((char) ('0' + v));
+            else if (v == 13) // wild-carding
+                ret.append((char) ('d'));
+            else
+                break;
+
+            v = (data[offset] >> 4) & 0xf;
+            if (v >= 0 && v <= 9)
+                ret.append((char) ('0' + v));
+            else if (v == 13) // wild-carding
+                ret.append((char) ('d'));
+            else
+                break;
+
+            v = data[offset + 1] & 0xf;
+            if (v >= 0 && v <= 9)
+                ret.append((char) ('0' + v));
+            else if (v == 13) // wild-carding
+                ret.append((char) ('d'));
+            else
+                break;
+
+            v = data[offset + 2] & 0xf;
+            if (v >= 0 && v <= 9)
+                ret.append((char) ('0' + v));
+            else if (v == 13) // wild-carding
+                ret.append((char) ('d'));
+            else
+                break;
+
+            v = (data[offset + 2] >> 4) & 0xf;
+            if (v >= 0 && v <= 9)
+                ret.append((char) ('0' + v));
+            else if (v == 13) // wild-carding
+                ret.append((char) ('d'));
+            else
+                break;
+
+            v = (data[offset + 1] >> 4) & 0xf;
+            if (v >= 0 && v <= 9)
+                ret.append((char) ('0' + v));
+            else if (v == 13) // wild-carding
+                ret.append((char) ('d'));
+            else
+                break;
+        }   while(false);
+
+        return ret.toString();
+    }
+
+    public static String parseLanguageIndicator(byte[] rawData, int offset, int length) {
+        if (null == rawData) {
+            return null;
+        }
+
+        if (rawData.length < offset + length) {
+            Rlog.e(LOG_TAG, "length is invalid");
+            return null;
+        }
+
+        return GsmAlphabet.gsm8BitUnpackedToString(rawData, offset, length);
+    }
+
+    /*
+      * parse plmn according to spec 24008
+    */
+    public static String
+       parsePlmnToString(byte[] data, int offset, int length) {
+
+        StringBuilder ret = new StringBuilder(length * 2);
+        int v;
+
+        do {
+            v = data[offset] & 0xf;
+            if (v > 9)  break;
+                ret.append((char) ('0' + v));
+
+            v = (data[offset] >> 4) & 0xf;
+            if (v > 9)  break;
+                ret.append((char) ('0' + v));
+
+            v = data[offset + 1] & 0xf;
+            if (v > 9)  break;
+                ret.append((char) ('0' + v));
+
+            v = data[offset + 2] & 0xf;
+            if (v > 9)  break;
+                ret.append((char) ('0' + v));
+
+            v = (data[offset + 2] >> 4) & 0xf;
+            if (v > 9)  break;
+                ret.append((char) ('0' + v));
+
+            v = (data[offset + 1] >> 4) & 0xf;
+            if (v > 9)  break;
+                ret.append((char) ('0' + v));
+        }   while(false);
+
+        return ret.toString();
+    }
+    // Added by M end
 }

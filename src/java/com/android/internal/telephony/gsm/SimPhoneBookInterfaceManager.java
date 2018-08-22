@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
 ** Copyright 2007, The Android Open Source Project
 **
 ** Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +41,9 @@ public class SimPhoneBookInterfaceManager extends IccPhoneBookInterfaceManager {
     public SimPhoneBookInterfaceManager(GSMPhone phone) {
         super(phone);
         //NOTE service "simphonebook" added by IccSmsInterfaceManagerProxy
+
+        logd("SimPhoneBookInterfaceManager has been created. (mAdnCache=" +
+                ((mAdnCache == null) ? "null" : "has been set."));
     }
 
     @Override

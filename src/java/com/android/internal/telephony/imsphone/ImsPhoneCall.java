@@ -117,6 +117,13 @@ public class ImsPhoneCall extends Call {
     @Override
     public void
     hangup() throws CallStateException {
+        /// M: ALPS02136981. Prints debug logs for ImsPhone. @{
+        if (mOwner != null) {
+            mOwner.logDebugMessagesWithOpFormat(
+                    "CC", "Hangup", getFirstConnection(), "ImsphoneCall.hangup");
+        }
+        /// @}
+
         mOwner.hangup(this);
     }
 
@@ -220,7 +227,8 @@ public class ImsPhoneCall extends Call {
      */
     /*package*/ boolean
     isFull() {
-        return mConnections.size() == ImsPhoneCallTracker.MAX_CONNECTIONS_PER_CALL;
+        return mConnections.size() ==
+            ImsPhoneCallTracker.MAX_CONNECTIONS_PER_CALL;
     }
 
     //***** Called from ImsPhoneCallTracker
@@ -289,6 +297,9 @@ public class ImsPhoneCall extends Call {
                     Rlog.d(LOG_TAG, "merge: conference connect time is 0");
                 }
             }
+            /// M: ALPS02067267. We need to distinguish this conference is host side. @{
+            imsPhoneConnection.setConferenceAsHost();
+            /// @}
         }
         if (DBG) {
             Rlog.d(LOG_TAG, "merge(" + mCallContext + "): " + that + "state = "

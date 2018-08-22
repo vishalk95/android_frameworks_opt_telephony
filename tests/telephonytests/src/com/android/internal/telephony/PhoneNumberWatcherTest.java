@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2008 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -243,7 +248,7 @@ public class PhoneNumberWatcherTest extends AndroidTestCase {
      */
     public void testAutoCompleteWithUnformattedNumber() {
         String init = "650-1";
-        String expected = "6501234567";
+        String expected = "(650) 123-4567";
         testReplacement(init, expected, expected);
     }
 

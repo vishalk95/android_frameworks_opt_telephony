@@ -24,8 +24,6 @@ import android.graphics.Bitmap;
  */
 class CommandParams {
     CommandDetails mCmdDet;
-    // Variable to track if an optional icon load has failed.
-    boolean mLoadIconFailed = false;
 
     CommandParams(CommandDetails cmdDet) {
         mCmdDet = cmdDet;
@@ -43,6 +41,22 @@ class CommandParams {
     }
 }
 
+/**
+ * CallCtrlBySimParams class for CC by SIM parameters.
+ */
+class CallCtrlBySimParams extends CommandParams {
+    TextMessage mTextMsg;
+    int mInfoType;
+    String mDestAddress;
+
+    CallCtrlBySimParams(CommandDetails cmdDet, TextMessage textMsg,
+        int infoType, String destAddress) {
+        super(cmdDet);
+        mTextMsg = textMsg;
+        mInfoType = infoType;
+        mDestAddress = destAddress;
+    }
+}
 class DisplayTextParams extends CommandParams {
     TextMessage mTextMsg;
 
@@ -224,33 +238,29 @@ class BIPClientParams extends CommandParams {
         return false;
     }
 }
-class ActivateParams extends CommandParams {
-    int mActivateTarget;
 
+// Add by Huibin Mao Mtk80229
+// ICS Migration start
+class SetupEventListParams extends CommandParams {
+    byte[] eventList;
+
+    SetupEventListParams(CommandDetails cmdDet, byte[] eventList) {
+        super(cmdDet);
+        this.eventList = eventList;
+    }
+
+}
+// ICS Migration end
+
+/**
+ * ActivateParams class for Activate command TLV data objects.
+ */
+class ActivateParams extends CommandParams {
+    int mTarget = 0;
 
     ActivateParams(CommandDetails cmdDet, int target) {
         super(cmdDet);
-        mActivateTarget = target;
+        this.mTarget = target;
     }
 }
 
-// Samsung STK
-class SendSMSParams extends DisplayTextParams {
-    String pdu;
-    String smscAddress;
-
-    SendSMSParams(CommandDetails cmdDet, TextMessage textmessage, String smscaddress, String smsPdu) {
-        super(cmdDet, textmessage);
-        smscAddress = smscaddress;
-        pdu = smsPdu;
-    }
-}
-
-class SendUSSDParams extends DisplayTextParams {
-    String ussdString;
-
-    SendUSSDParams(CommandDetails cmdDet, TextMessage textmessage, String ussdstring) {
-        super(cmdDet, textmessage);
-        ussdString = ussdstring;
-    }
-}

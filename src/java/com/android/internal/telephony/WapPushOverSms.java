@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2008 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,10 +49,8 @@ import android.provider.Telephony.Sms.Intents;
 import android.telephony.Rlog;
 import android.telephony.SmsManager;
 import android.telephony.SubscriptionManager;
-import android.text.TextUtils;
 import android.util.Log;
 
-import com.android.internal.telephony.ConfigResourceUtil;
 import com.android.internal.telephony.uicc.IccUtils;
 import com.google.android.mms.MmsException;
 import com.google.android.mms.pdu.DeliveryInd;
@@ -116,13 +119,11 @@ public class WapPushOverSms implements ServiceConnection {
      * wap-230-wsp-20010705-a section 8 for details on the WAP PDU format.
      *
      * @param pdu The WAP PDU, made up of one or more SMS PDUs
-     * @param address The originating address
      * @return a result code from {@link android.provider.Telephony.Sms.Intents}, or
      *         {@link Activity#RESULT_OK} if the message has been broadcast
      *         to applications
      */
-    public int dispatchWapPdu(byte[] pdu, BroadcastReceiver receiver, InboundSmsHandler handler,
-            String address) {
+    public int dispatchWapPdu(byte[] pdu, BroadcastReceiver receiver, InboundSmsHandler handler) {
 
         if (DBG) Rlog.d(TAG, "Rx: " + IccUtils.bytesToHexString(pdu));
 
@@ -197,6 +198,9 @@ public class WapPushOverSms implements ServiceConnection {
 
             byte[] header = new byte[headerLength];
             System.arraycopy(pdu, headerStartIndex, header, 0, header.length);
+            // MTK-START
+            pduDecoder.decodeHeaders(index, headerLength - index + headerStartIndex);
+            // MTK-END
 
             byte[] intentData;
 
@@ -253,10 +257,18 @@ public class WapPushOverSms implements ServiceConnection {
                         intent.putExtra("data", intentData);
                         intent.putExtra("contentTypeParameters",
                                 pduDecoder.getContentParameters());
-                        if (!TextUtils.isEmpty(address)) {
-                            intent.putExtra("address", address);
-                        }
                         SubscriptionManager.putPhoneIdAndSubIdExtra(intent, phoneId);
+                        // MTK-START
+                        intent.putExtra("wspHeaders", pduDecoder.getHeaders());
+
+                        if (bundle != null) {
+                            Rlog.d(TAG, "put addr info into intent 1");
+                            intent.putExtra(Telephony.WapPush.ADDR, bundle.getString(
+                                    Telephony.WapPush.ADDR));
+                            intent.putExtra(Telephony.WapPush.SERVICE_ADDR, bundle.getString(
+                                    Telephony.WapPush.SERVICE_ADDR));
+                        }
+                        // MTK-END
 
                         int procRet = wapPushMan.processMessage(wapAppId, contentType, intent);
                         if (DBG) Rlog.v(TAG, "procRet:" + procRet);
@@ -283,9 +295,15 @@ public class WapPushOverSms implements ServiceConnection {
             int appOp;
 
             if (mimeType.equals(WspTypeDecoder.CONTENT_TYPE_B_MMS)) {
+                // MTK-START
+                Rlog.d(TAG, "WapPush set permission for RECEIVE_MMS");
+                // MTK-END
                 permission = android.Manifest.permission.RECEIVE_MMS;
                 appOp = AppOpsManager.OP_RECEIVE_MMS;
             } else {
+                // MTK-START
+                Rlog.d(TAG, "WapPush set permission for RECEIVE_WAP_PUSH");
+                // MTK-END
                 permission = android.Manifest.permission.RECEIVE_WAP_PUSH;
                 appOp = AppOpsManager.OP_RECEIVE_WAP_PUSH;
             }
@@ -297,23 +315,21 @@ public class WapPushOverSms implements ServiceConnection {
             intent.putExtra("header", header);
             intent.putExtra("data", intentData);
             intent.putExtra("contentTypeParameters", pduDecoder.getContentParameters());
-            if (!TextUtils.isEmpty(address)) {
-                intent.putExtra("address", address);
-            }
             SubscriptionManager.putPhoneIdAndSubIdExtra(intent, phoneId);
+            // MTK-START
+            intent.putExtra("wspHeaders", pduDecoder.getHeaders());
 
-            // Direct the intent to only the default WAP Push app. If none declared:
+            if (bundle != null) {
+                Rlog.d(TAG, "put addr info into intent 2");
+                intent.putExtra(Telephony.WapPush.ADDR, bundle.getString(Telephony.WapPush.ADDR));
+                intent.putExtra(Telephony.WapPush.SERVICE_ADDR, bundle.getString(
+                        Telephony.WapPush.SERVICE_ADDR));
+            }
+            // MTK-END
+
             // Direct the intent to only the default MMS app. If we can't find a default MMS app
             // then sent it to all broadcast receivers.
-            ComponentName componentName = null;
-            String fqcn = new ConfigResourceUtil().getStringValue(mContext, "default_wap_push_handler");
-            if (!mimeType.equals(WspTypeDecoder.CONTENT_TYPE_B_MMS) && !TextUtils.isEmpty(fqcn)) {
-                componentName = ComponentName.unflattenFromString(fqcn);
-            }
-            if (componentName == null) {
-                componentName = SmsApplication.getDefaultMmsApplication(mContext, true);
-            }
-
+            ComponentName componentName = SmsApplication.getDefaultMmsApplication(mContext, true);
             Bundle options = null;
             if (componentName != null) {
                 // Deliver MMS message only to this receiver
@@ -511,4 +527,22 @@ public class WapPushOverSms implements ServiceConnection {
         }
         return false;
     }
+
+    // MTK-START
+    /*
+     * Add for wappush to get address and service address.
+     * Address and service address will be stored in bundle
+     * dispatchWapPdu(byte[] pdu, Bundle extra) will be called by framework
+     */
+    private Bundle bundle;
+    public int dispatchWapPdu(byte[] pdu,  BroadcastReceiver receiver, InboundSmsHandler handler,
+            Bundle extra) {
+        if (DBG) Rlog.i(TAG, "dispathchWapPdu!"
+            + extra.getString(Telephony.WapPush.ADDR) + " "
+            + extra.getString(Telephony.WapPush.SERVICE_ADDR));
+
+        bundle = extra;
+        return dispatchWapPdu(pdu, receiver, handler);
+    }
+    // MTK-END
 }

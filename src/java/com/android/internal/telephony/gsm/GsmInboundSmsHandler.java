@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2013 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +24,9 @@ package com.android.internal.telephony.gsm;
 import android.app.Activity;
 import android.content.Context;
 import android.os.Message;
+// MTK-START
+import android.os.SystemProperties;
+// MTK-END
 import android.provider.Telephony.Sms.Intents;
 
 import com.android.internal.telephony.CommandsInterface;
@@ -31,6 +39,12 @@ import com.android.internal.telephony.uicc.IccRecords;
 import com.android.internal.telephony.uicc.UiccController;
 import com.android.internal.telephony.uicc.UsimServiceTable;
 
+// MTK-START
+import com.mediatek.common.MPlugin;
+// duplicate sms enhancement
+import com.mediatek.common.sms.IDupSmsFilterExt;
+// MTK-END
+
 /**
  * This class broadcasts incoming SMS messages to interested apps after storing them in
  * the SmsProvider "raw" table and ACKing them to the SMSC. After each message has been
@@ -39,6 +53,11 @@ public class GsmInboundSmsHandler extends InboundSmsHandler {
 
     /** Handler for SMS-PP data download messages to UICC. */
     private final UsimDataDownloadHandler mDataDownloadHandler;
+
+    // MTK-START
+    /** Check if any duplicated SMS */
+    private IDupSmsFilterExt mDupSmsFilterExt = null;
+    // MTK-END
 
     /**
      * Create a new GSM inbound SMS handler.
@@ -49,6 +68,21 @@ public class GsmInboundSmsHandler extends InboundSmsHandler {
                 GsmCellBroadcastHandler.makeGsmCellBroadcastHandler(context, phone));
         phone.mCi.setOnNewGsmSms(getHandler(), EVENT_NEW_SMS, null);
         mDataDownloadHandler = new UsimDataDownloadHandler(phone.mCi);
+
+        // MTK-START
+        // If it is not BSP package, create the duplicat sms filter class
+        if (!SystemProperties.get("ro.mtk_bsp_package").equals("1")) {
+            mDupSmsFilterExt = MPlugin.createInstance(IDupSmsFilterExt.class.getName(), context);
+
+            if (mDupSmsFilterExt != null) {
+                mDupSmsFilterExt.setPhoneId(mPhone.getPhoneId());
+                String actualClassName = mDupSmsFilterExt.getClass().getName();
+                log("initial IDupSmsFilterExt done, actual class name is " + actualClassName);
+            } else {
+                log("FAIL! intial IDupSmsFilterExt");
+            }
+        }
+        // MTK-END
     }
 
     /**
@@ -93,6 +127,16 @@ public class GsmInboundSmsHandler extends InboundSmsHandler {
     @Override
     protected int dispatchMessageRadioSpecific(SmsMessageBase smsb) {
         SmsMessage sms = (SmsMessage) smsb;
+
+        // MTK-START
+        if (!SystemProperties.get("ro.mtk_bsp_package").equals("1")) {
+            // Remove the duplicated sms for a period of time
+            if (mDupSmsFilterExt.containDupSms(sms.getPdu())) {
+                log("discard dup sms");
+                return Intents.RESULT_SMS_HANDLED;
+            }
+        }
+        // MTK-END
 
         if (sms.isTypeZero()) {
             // As per 3GPP TS 23.040 9.2.3.9, Type Zero messages should not be

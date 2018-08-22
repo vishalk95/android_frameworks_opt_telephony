@@ -17,52 +17,99 @@
 package com.android.internal.telephony.cat;
 
 public class CatResponseMessage {
-        CommandDetails mCmdDet = null;
-        ResultCode mResCode  = ResultCode.OK;
-        int mUsersMenuSelection = 0;
-        String mUsersInput  = null;
-        boolean mUsersYesNoSelection = false;
-        boolean mUsersConfirm = false;
-        boolean mIncludeAdditionalInfo = false;
-        int mAdditionalInfo = 0;
-        int mEventValue = -1;
-        byte[] mAddedInfo = null;
+    CommandDetails mCmdDet = null;
+    ResultCode mResCode  = ResultCode.OK;
+    int mUsersMenuSelection = 0;
+    String mUsersInput  = null;
+    boolean mUsersYesNoSelection = false;
+    boolean mUsersConfirm = false;
+    boolean mIncludeAdditionalInfo = false;
+    int mEvent = 0;
+    int mSourceId = 0;
+    int mDestinationId = 0;
+    byte[] mAdditionalInfo = null;
+    boolean mOneShot = false;
+    int mEventValue = -1;
+    byte[] mAddedInfo = null;
 
-        public CatResponseMessage(CatCmdMessage cmdMsg) {
-            mCmdDet = cmdMsg.mCmdDet;
-        }
+    public CatResponseMessage(CatCmdMessage cmdMsg) {
+        mCmdDet = cmdMsg.mCmdDet;
+    }
 
-        public void setResultCode(ResultCode resCode) {
-            mResCode = resCode;
-        }
+    public void setResultCode(ResultCode resCode) {
+        mResCode = resCode;
+    }
 
-        public void setMenuSelection(int selection) {
-            mUsersMenuSelection = selection;
-        }
+    public void setMenuSelection(int selection) {
+        mUsersMenuSelection = selection;
+    }
 
-        public void setInput(String input) {
-            mUsersInput = input;
-        }
+    public void setInput(String input) {
+        mUsersInput = input;
+    }
 
-        public void setEventDownload(int event, byte[] addedInfo) {
-            this.mEventValue = event;
-            this.mAddedInfo = addedInfo;
-        }
+    public void setYesNo(boolean yesNo) {
+        mUsersYesNoSelection = yesNo;
+    }
 
-        public void setYesNo(boolean yesNo) {
-            mUsersYesNoSelection = yesNo;
-        }
+    public void setConfirmation(boolean confirm) {
+        mUsersConfirm = confirm;
+    }
 
-        public void setConfirmation(boolean confirm) {
-            mUsersConfirm = confirm;
-        }
+    CommandDetails getCmdDetails() {
+        return mCmdDet;
+    }
 
-        public void setAdditionalInfo(int info) {
+    public CatResponseMessage() {
+    }
+
+    public CatResponseMessage(int event) {
+        mEvent = event;
+    }
+
+    /**
+       * Set the source id of the device tag in the terminal response
+       * @internal
+       */
+    public void setSourceId(int sId) {
+        mSourceId = sId;
+    }
+
+    public void setEventDownload(int event, byte[] addedInfo) {
+        this.mEventValue = event;
+        this.mAddedInfo = addedInfo;
+    }
+
+    public void setEventId(int event) {
+        mEvent = event;
+    }
+
+    /**
+       * Set the destination id of the device tag in the terminal response
+       * @internal
+       */
+    public void setDestinationId(int dId) {
+        mDestinationId = dId;
+    }
+
+
+    /**
+       * Set the additional information of result code
+       * @internal
+       */
+    public void setAdditionalInfo(byte[] additionalInfo) {
+        if (additionalInfo != null) {
             mIncludeAdditionalInfo = true;
-            mAdditionalInfo = info;
         }
+        mAdditionalInfo = additionalInfo;
+    }
 
-        CommandDetails getCmdDetails() {
-            return mCmdDet;
-        }
+    /**
+       * Set the one shot flag in the terminal response
+       * @internal
+       */
+    public void setOneShot(boolean shot) {
+        mOneShot = shot;
+    }
+    // ICS Migration end
     }

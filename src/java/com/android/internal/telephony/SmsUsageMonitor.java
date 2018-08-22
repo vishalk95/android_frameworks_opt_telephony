@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2011 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,7 +54,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -65,7 +69,10 @@ import java.util.regex.Pattern;
  */
 public class SmsUsageMonitor {
     private static final String TAG = "SmsUsageMonitor";
-    private static final boolean DBG = false;
+    /* MTK-START */
+    /* Turn on debug information to speed up the issue analysis on short code sms issue */
+    private static final boolean DBG = true;
+    /* MTK-END */
     private static final boolean VDBG = false;
 
     private static final String SHORT_CODE_PATH = "/data/misc/sms/codes";
@@ -109,11 +116,15 @@ public class SmsUsageMonitor {
     /** Premium SMS permission when the owner has allowed the app to send premium SMS. */
     public static final int PREMIUM_SMS_PERMISSION_ALWAYS_ALLOW = 3;
 
-    private final AtomicInteger mCheckPeriod = new AtomicInteger(0);
-    private final AtomicInteger mMaxAllowed = new AtomicInteger(0);
+    private final int mCheckPeriod;
+    private final int mMaxAllowed;
 
     private final HashMap<String, ArrayList<Long>> mSmsStamp =
             new HashMap<String, ArrayList<Long>>();
+
+    // MTK-START
+    private static final String PACKAGE_NAME_MMS = "com.android.mms";
+    // MTK-END
 
     /** Context for retrieving regexes from XML resource. */
     private final Context mContext;
@@ -227,16 +238,11 @@ public class SmsUsageMonitor {
     private static class SettingsObserver extends ContentObserver {
         private final Context mContext;
         private final AtomicBoolean mEnabled;
-        private final AtomicInteger mLimit;
-        private final AtomicInteger mPeriod;
 
-        SettingsObserver(Handler handler, Context context, AtomicBoolean enabled,
-                AtomicInteger limit, AtomicInteger period) {
+        SettingsObserver(Handler handler, Context context, AtomicBoolean enabled) {
             super(handler);
             mContext = context;
             mEnabled = enabled;
-            mLimit = limit;
-            mPeriod = period;
             onChange(false);
         }
 
@@ -244,25 +250,15 @@ public class SmsUsageMonitor {
         public void onChange(boolean selfChange) {
             mEnabled.set(Settings.Global.getInt(mContext.getContentResolver(),
                     Settings.Global.SMS_SHORT_CODE_CONFIRMATION, 1) != 0);
-            mLimit.set(Settings.Global.getInt(mContext.getContentResolver(),
-                    Settings.Global.SMS_OUTGOING_CHECK_MAX_COUNT, DEFAULT_SMS_MAX_COUNT));
-            mPeriod.set(Settings.Global.getInt(mContext.getContentResolver(),
-                    Settings.Global.SMS_OUTGOING_CHECK_INTERVAL_MS, DEFAULT_SMS_CHECK_PERIOD));
         }
     }
 
     private static class SettingsObserverHandler extends Handler {
-        SettingsObserverHandler(Context context, AtomicBoolean enabled, AtomicInteger limit,
-                AtomicInteger period) {
+        SettingsObserverHandler(Context context, AtomicBoolean enabled) {
             ContentResolver resolver = context.getContentResolver();
-            ContentObserver globalObserver = new SettingsObserver(this, context, enabled, limit,
-                    period);
+            ContentObserver globalObserver = new SettingsObserver(this, context, enabled);
             resolver.registerContentObserver(Settings.Global.getUriFor(
                     Settings.Global.SMS_SHORT_CODE_CONFIRMATION), false, globalObserver);
-            resolver.registerContentObserver(Settings.Global.getUriFor(
-                    Settings.Global.SMS_OUTGOING_CHECK_MAX_COUNT), false, globalObserver);
-            resolver.registerContentObserver(Settings.Global.getUriFor(
-                    Settings.Global.SMS_OUTGOING_CHECK_INTERVAL_MS), false, globalObserver);
         }
     }
 
@@ -272,9 +268,17 @@ public class SmsUsageMonitor {
      */
     public SmsUsageMonitor(Context context) {
         mContext = context;
+        ContentResolver resolver = context.getContentResolver();
 
-        mSettingsObserverHandler = new SettingsObserverHandler(mContext, mCheckEnabled,
-                mMaxAllowed, mCheckPeriod);
+        mMaxAllowed = Settings.Global.getInt(resolver,
+                Settings.Global.SMS_OUTGOING_CHECK_MAX_COUNT,
+                DEFAULT_SMS_MAX_COUNT);
+
+        mCheckPeriod = Settings.Global.getInt(resolver,
+                Settings.Global.SMS_OUTGOING_CHECK_INTERVAL_MS,
+                DEFAULT_SMS_CHECK_PERIOD);
+
+        mSettingsObserverHandler = new SettingsObserverHandler(mContext, mCheckEnabled);
 
         loadPremiumSmsPolicyDb();
     }
@@ -370,6 +374,12 @@ public class SmsUsageMonitor {
      *  of new sms messages
      */
     public boolean check(String appName, int smsWaiting) {
+        // MTK-START
+        if (appName.equals(PACKAGE_NAME_MMS)) {
+            return true;
+        }
+        // MTK-END
+
         synchronized (mSmsStamp) {
             removeExpiredTimestamps();
 
@@ -619,7 +629,7 @@ public class SmsUsageMonitor {
      * to send messages and then uninstalled.
      */
     private void removeExpiredTimestamps() {
-        long beginCheckPeriod = System.currentTimeMillis() - mCheckPeriod.get();
+        long beginCheckPeriod = System.currentTimeMillis() - mCheckPeriod;
 
         synchronized (mSmsStamp) {
             Iterator<Map.Entry<String, ArrayList<Long>>> iter = mSmsStamp.entrySet().iterator();
@@ -635,7 +645,7 @@ public class SmsUsageMonitor {
 
     private boolean isUnderLimit(ArrayList<Long> sent, int smsWaiting) {
         Long ct = System.currentTimeMillis();
-        long beginCheckPeriod = ct - mCheckPeriod.get();
+        long beginCheckPeriod = ct - mCheckPeriod;
 
         if (VDBG) log("SMS send size=" + sent.size() + " time=" + ct);
 
@@ -643,7 +653,7 @@ public class SmsUsageMonitor {
             sent.remove(0);
         }
 
-        if ((sent.size() + smsWaiting) <= mMaxAllowed.get()) {
+        if ((sent.size() + smsWaiting) <= mMaxAllowed) {
             for (int i = 0; i < smsWaiting; i++ ) {
                 sent.add(ct);
             }

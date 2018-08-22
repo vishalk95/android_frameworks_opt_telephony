@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2007 Esmertec AG.
  * Copyright (C) 2007 The Android Open Source Project
  *
@@ -114,4 +119,9 @@ public class SendConf extends GenericPdu {
      *    public byte[] getStoreStatusText() {return null;}
      *    public void setStoreStatusText(byte[] value) {}
      */
+
+    /// M: new method for CT.
+    public EncodedStringValue getResponseText() {
+        return mPduHeaders.getEncodedStringValue(PduHeaders.RESPONSE_TEXT);
+    }
 }

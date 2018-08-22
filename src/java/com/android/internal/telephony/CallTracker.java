@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,18 +27,24 @@ import android.os.Message;
 import android.os.SystemProperties;
 import android.text.TextUtils;
 import com.android.internal.telephony.CommandException;
+/// M: For conference SRVCC. @{
+import com.android.internal.telephony.imsphone.ImsPhoneConnection;
+/// @}
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.ArrayList;
-
+/// M: CC082 Fix Google bug. Avoid ConcurrentModificationException @{
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+/// @}
 
 /**
  * {@hide}
  */
 public abstract class CallTracker extends Handler {
 
-    private static final boolean DBG_POLL = false;
+    private static final boolean DBG_POLL = true;
 
     //***** Constants
 
@@ -42,12 +53,29 @@ public abstract class CallTracker extends Handler {
     protected int mPendingOperations;
     protected boolean mNeedsPoll;
     protected Message mLastRelevantPoll;
-    protected ArrayList<Connection> mHandoverConnections = new ArrayList<Connection>();
+    /// M: CC082 Fix Google bug. Avoid ConcurrentModificationException @{
+    //protected ArrayList<Connection> mHandoverConnections = new ArrayList<Connection>();
+    protected List<Connection> mHandoverConnections = new CopyOnWriteArrayList<>();
+    /// @}
 
     public CommandsInterface mCi;
 
     protected boolean mNumberConverted = false;
     private final int VALID_COMPARE_LENGTH   = 3;
+
+    /// M: ALPS02019630. @{
+    /**
+     * For conference host side, need to wait until ECONFSRVCC URC recieved then all participant's
+     * address could be known by this URC and the conference XML file.
+    */
+    protected boolean mNeedWaitImsEConfSrvcc = false;
+
+    /**
+     * Identify the host connection for conference host side SRVCC.
+    */
+    protected Connection mImsConfHostConnection = null;
+    /// @}
+
 
     //***** Events
 
@@ -67,6 +95,24 @@ public abstract class CallTracker extends Handler {
     protected static final int EVENT_CALL_WAITING_INFO_CDMA        = 15;
     protected static final int EVENT_THREE_WAY_DIAL_L2_RESULT_CDMA = 16;
     protected static final int EVENT_THREE_WAY_DIAL_BLANK_FLASH    = 20;
+
+    /// M: CC010: Add RIL interface @{
+    protected static final int EVENT_HANG_UP_RESULT                = 21;
+    protected static final int EVENT_DIAL_CALL_RESULT              = 22;
+    protected static final int EVENT_RADIO_OFF_OR_NOT_AVAILABLE    = 23;
+    protected static final int EVENT_INCOMING_CALL_INDICATION      = 24;
+    //protected static final int EVENT_CNAP_INDICATION               = 25; //obsolete
+    protected static final int EVENT_SPEECH_CODEC_INFO             = 26;
+    /// @}
+    protected static final int EVENT_CDMA_CALL_ACCEPTED            = 27;
+    protected static final int EVENT_CDMA_DIAL_THREEWAY_DELAY      = 28;
+    protected static final int EVENT_EXIT_ECM_RESPONSE_DIAL_THREEWAY = 29;
+    ///M: IMS conference call feature. @{
+    protected static final int EVENT_ECONF_SRVCC_INDICATION = 30;
+    protected static final int EVENT_ECONF_RESULT_INDICATION = 31;
+    protected static final int EVENT_RETRIEVE_HELD_CALL_RESULT = 32;
+    protected static final int EVENT_CALL_INFO_INDICATION = 33;
+    /// @}
 
     protected void pollCallsWhenSafe() {
         mNeedsPoll = true;
@@ -95,13 +141,20 @@ public abstract class CallTracker extends Handler {
     protected abstract void handlePollCalls(AsyncResult ar);
 
     protected Connection getHoConnection(DriverCall dc) {
-        for (Connection hoConn : mHandoverConnections) {
-            log("getHoConnection - compare number: hoConn= " + hoConn.toString());
-            if (hoConn.getAddress() != null && hoConn.getAddress().contains(dc.number)) {
-                log("getHoConnection: Handover connection match found = " + hoConn.toString());
-                return hoConn;
+        /// M: ALPS01995466. JE because dc.number is null. @{
+        log("SRVCC: getHoConnection() with dc, number = " + dc.number + " state = " + dc.state);
+
+        if (dc.number != null && !dc.number.isEmpty()) {
+            /// @}
+            for (Connection hoConn : mHandoverConnections) {
+                log("getHoConnection - compare number: hoConn= " + hoConn.toString());
+                if (hoConn.getAddress() != null && hoConn.getAddress().contains(dc.number)) {
+                    log("getHoConnection: Handover connection match found = " + hoConn.toString());
+                    return hoConn;
+                }
             }
         }
+
         for (Connection hoConn : mHandoverConnections) {
             log("getHoConnection: compare state hoConn= " + hoConn.toString());
             if (hoConn.getStateBeforeHandover() == Call.stateFromDCState(dc.state)) {
@@ -116,6 +169,17 @@ public abstract class CallTracker extends Handler {
         if (state == Call.SrvccState.STARTED && c != null) {
             // SRVCC started. Prepare handover connections list
             mHandoverConnections.addAll(c);
+
+            /// M: ALPS02019630. ECONFSRVCC is only for conference host side. @{
+            for (Connection conn : mHandoverConnections) {
+                if (conn.isMultiparty() && conn instanceof ImsPhoneConnection
+                        && ((ImsPhoneConnection)conn).isConferenceHost()) {
+                    log("srvcc: mNeedWaitImsEConfSrvcc set True");
+                    mNeedWaitImsEConfSrvcc = true;
+                    mImsConfHostConnection = conn;
+                }
+            }
+            /// @}
         } else if (state != Call.SrvccState.COMPLETED) {
             // SRVCC FAILED/CANCELED. Clear the handover connections list
             // Individual connections will be removed from the list in handlePollCalls()

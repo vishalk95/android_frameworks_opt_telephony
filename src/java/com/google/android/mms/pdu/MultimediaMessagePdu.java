@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2007 Esmertec AG.
  * Copyright (C) 2007 The Android Open Source Project
  *
@@ -147,4 +152,15 @@ public class MultimediaMessagePdu extends GenericPdu{
     public void setDate(long value) {
         mPduHeaders.setLongInteger(value, PduHeaders.DATE);
     }
+
+    /// M: add for saving sent time of received messages. @{
+    /**
+     * Get DATE_SENT value.
+     *
+     * @return the value
+     */
+    public long getDateSent() {
+        return mPduHeaders.getLongInteger(PduHeaders.DATE_SENT);
+    }
+    /// @}
 }

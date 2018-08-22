@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2007-2008 Esmertec AG.
  * Copyright (C) 2007-2008 The Android Open Source Project
  *
@@ -113,6 +118,12 @@ public class PduPart {
       * Data uri.
       */
      private Uri mUri = null;
+     /*
+      * M: Whether the part should be update or not.
+      * The default value should be true because 3rd app
+      * would not change this.
+      */
+     private boolean mNeedUpdate = true;
 
      /**
       * Part data.
@@ -410,5 +421,79 @@ public class PduPart {
             return new String(location);
         }
     }
+
+    /// New variable and methods
+    /// M:Code analyze 001,add for extendsional field,they are not support in google default code @{
+    public static final int P_X_WAP_CONTENT_URI = 0xB0;
+    public static final int P_DATE = 0x92;
+    /// @}
+    /// M:Code analyze 002,add some new string @{
+    /**
+     * Content=Id string.
+     */
+    public static final String CONTENT_TYPE =
+            "Content-Type";
+
+    /**
+     * Content=Id string.
+     */
+    public static final String CONTENT_ID =
+            "Content-ID";
+
+    /**
+     * Content=Location string.
+     */
+    public static final String CONTENT_LOCATION =
+            "Content-Location";
+
+    /**
+     * Content=Id string.
+     */
+    public static final String CONTENT_DISPOSITION =
+            "Content-Disposition";
+
+    /**
+     * Content=Name string.
+     */
+    public static final String PARA_NAME =
+            "Name";
+    /// @}
+    /// M:Code analyze 003,add a method for getting XWap uri @{
+    public byte[] getXWapContentUri() {
+        return (byte[]) mPartHeader.get(P_X_WAP_CONTENT_URI);
+    }
+    /// @}
+
+    /// M:Code analyze 004,add a method for setting XWap uri @P
+    public void setXWapContentUri(byte[] wapcontenturi) {
+        if (null == wapcontenturi) {
+            throw new NullPointerException("null content-id");
+        }
+
+        mPartHeader.put(P_X_WAP_CONTENT_URI, wapcontenturi);
+    }
+    /// @}
+
+    /// M:Code analyze 005,add a method for getting Date @{
+    public long getDate() {
+        return ((Long) mPartHeader.get(P_DATE)).longValue();
+    }
+    /// @}
+
+    /// M:Code analyze 006,add a method for setting Date @{
+    public void setDate(long date) {
+        mPartHeader.put(P_DATE, date);
+    }
+    /// @}
+
+    /// M: Get and set value that the part need update or not. @{
+    public boolean needUpdate() {
+        return mNeedUpdate;
+    }
+
+    public void setNeedUpdate(boolean needUpdate) {
+        this.mNeedUpdate = needUpdate;
+    }
+    /// @}
 }
 

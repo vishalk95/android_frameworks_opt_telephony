@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,7 +33,9 @@ import android.util.SparseIntArray;
 import com.android.internal.R;
 import com.android.internal.telephony.DctConstants;
 import com.android.internal.telephony.Phone;
+import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.util.IndentingPrintWriter;
+
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -94,10 +101,9 @@ public class ApnContext {
     private boolean mConcurrentVoiceAndDataAllowed;
 
     /**
-     * used to track a single connection request so disconnects can get ignored if
-     * obsolete.
-     */
-    private final AtomicInteger mConnectionGeneration = new AtomicInteger(0);
+      * To decrease the time of unused apn type.
+      */
+    private boolean mNeedNotify;
 
     public ApnContext(Context context, String apnType, String logTag, NetworkConfig config,
             DcTrackerBase tracker) {
@@ -111,6 +117,8 @@ public class ApnContext {
         priority = config.priority;
         LOG_TAG = logTag;
         mDcTracker = tracker;
+
+        mNeedNotify = needNotifyType(apnType);
     }
 
     public String getApnType() {
@@ -261,6 +269,7 @@ public class ApnContext {
             log("set enabled as " + enabled + ", current state is " + mDataEnabled.get());
         }
         mDataEnabled.set(enabled);
+        mNeedNotify = true;
     }
 
     public boolean isEnabled() {
@@ -282,7 +291,11 @@ public class ApnContext {
         String provisioningApn = mContext.getResources()
                 .getString(R.string.mobile_provisioning_apn);
         if (!TextUtils.isEmpty(provisioningApn) &&
-                (mApnSetting != null) && (mApnSetting.apn != null)) {
+            (mApnSetting != null) && (mApnSetting.apn != null)) {
+            if (provisioningApn.equals("")) {
+                log("provisioningApn is empty");
+                return false;
+            }
             return (mApnSetting.apn.equals(provisioningApn));
         } else {
             return false;
@@ -314,20 +327,15 @@ public class ApnContext {
                 log.log("ApnContext.incRefCount - " + mRefCount);
             }
             if (mRefCount++ == 0) {
+                log("incRefCount:mRefCount == 0 ");
                 mDcTracker.setEnabled(mDcTracker.apnTypeToId(mApnType), true);
             }
-            log("incRefCount postIncrement = " + mRefCount);
         }
     }
 
     public void decRefCount(LocalLog log) {
         synchronized (mRefCountLock) {
-            if (mRefCount == 0) {
-                log.log("ApnContext.decRefCount - reset to 0.");
-                log("decRefCount attempt to decrement below 0");
-                return;
-            }
-
+            log("decRefCount mRefCount = " + mRefCount);
             // leave the last log alive to capture the actual tear down
             if (mRefCount != 1) {
                 if (mLocalLogs.remove(log)) {
@@ -339,11 +347,8 @@ public class ApnContext {
                 log.log("ApnContext.decRefCount - 1");
             }
             if (mRefCount-- == 1) {
+                log("decRefCount:mRefCount == 1 ");
                 mDcTracker.setEnabled(mDcTracker.apnTypeToId(mApnType), false);
-            }
-            if (mRefCount < 0) {
-                log.log("ApnContext.decRefCount went to " + mRefCount);
-                mRefCount = 0;
             }
         }
     }
@@ -409,13 +414,26 @@ public class ApnContext {
         return result;
     }
 
-    public int incAndGetConnectionGeneration() {
-        return mConnectionGeneration.incrementAndGet();
+    //MTK Start: Check need notify or not
+    private boolean needNotifyType(String apnTypes) {
+        if (apnTypes.equals(PhoneConstants.APN_TYPE_DM)
+                || apnTypes.equals(PhoneConstants.APN_TYPE_WAP)
+                || apnTypes.equals(PhoneConstants.APN_TYPE_NET)
+                || apnTypes.equals(PhoneConstants.APN_TYPE_CMMAIL)
+                || apnTypes.equals(PhoneConstants.APN_TYPE_TETHERING)
+                || apnTypes.equals(PhoneConstants.APN_TYPE_RCSE)) {
+            return false;
+        }
+        return true;
     }
 
-    public int getConnectionGeneration() {
-        return mConnectionGeneration.get();
+    public boolean isNeedNotify() {
+        if (DBG) {
+            log("Current apn tpye:" + mApnType + " isNeedNotify" + mNeedNotify);
+        }
+        return mNeedNotify;
     }
+    //MTK End: Check need notify or not
 
     @Override
     public synchronized String toString() {

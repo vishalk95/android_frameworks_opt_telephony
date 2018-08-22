@@ -122,9 +122,11 @@ class BerTlv {
 
         /* COMPREHENSION-TLVs */
         if (endIndex - curIndex < length) {
+            /* Go on decoding comprehension TLV to check mininum set elements.(TS102.223, 6.10.3)
             throw new ResultException(ResultCode.CMD_DATA_NOT_UNDERSTOOD,
                     "Command had extra data endIndex=" + endIndex + " curIndex=" + curIndex +
                     " length=" + length);
+             */
         }
 
         List<ComprehensionTlv> ctlvs = ComprehensionTlv.decodeMany(data,

@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2006 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,16 +57,25 @@ import android.util.LocalLog;
 import android.telephony.Rlog;
 
 import com.android.internal.R;
+import com.android.internal.telephony.TelephonyIntents;
 import com.android.internal.telephony.DctConstants;
 import com.android.internal.telephony.EventLogTags;
+import com.android.internal.telephony.IccCardConstants;
 import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.PhoneBase;
 import com.android.internal.telephony.PhoneConstants;
-import com.android.internal.telephony.PhoneFactory;
+import com.android.internal.telephony.SubscriptionController;
 import com.android.internal.telephony.uicc.IccRecords;
+import com.android.internal.telephony.uicc.UiccCardApplication;
 import com.android.internal.telephony.uicc.UiccController;
+import com.android.internal.telephony.CommandException;
+import com.android.internal.telephony.CommandException.Error;
 import com.android.internal.util.AsyncChannel;
 import com.android.internal.util.ArrayUtils;
+import com.mediatek.internal.telephony.cdma.CdmaFeatureOptionUtils;
+import com.mediatek.internal.telephony.dataconnection.DataSubSelector;
+import com.mediatek.internal.telephony.dataconnection.IaExtendParam;
+import com.mediatek.internal.telephony.ltedc.svlte.SvlteUtils;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -77,13 +91,22 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.PriorityQueue;
 
+/** M: start */
+import com.android.internal.telephony.RILConstants;
+import com.mediatek.common.MPlugin;
+import com.mediatek.common.telephony.ITelephonyExt;
+import com.mediatek.internal.telephony.ITelephonyEx;
+import android.os.ServiceManager;
+import android.os.RemoteException;
+/** M: end */
+
 /**
  * {@hide}
  */
 public abstract class DcTrackerBase extends Handler {
     protected static final boolean DBG = true;
-    protected static final boolean VDBG = false; // STOPSHIP if true
-    protected static final boolean VDBG_STALL = false; // STOPSHIP if true
+    protected static final boolean VDBG = true; // STOPSHIP if true
+    protected static final boolean VDBG_STALL = true; // STOPSHIP if true
     protected static final boolean RADIO_TESTS = false;
 
     static boolean mIsCleanupRequired = false;
@@ -97,7 +120,7 @@ public abstract class DcTrackerBase extends Handler {
 
     /** Delay between APN attempts.
         Note the property override mechanism is there just for testing purpose only. */
-    protected static final int APN_DELAY_DEFAULT_MILLIS = 3000;
+    protected static final int APN_DELAY_DEFAULT_MILLIS = 20000;
 
     /** Delay between APN attempts when in fail fast mode */
     protected static final int APN_FAIL_FAST_DELAY_DEFAULT_MILLIS = 3000;
@@ -115,8 +138,7 @@ public abstract class DcTrackerBase extends Handler {
     // persisted
     protected boolean mUserDataEnabled = true;
 
-    // TODO: move away from static state once 5587429 is fixed.
-    protected static boolean sPolicyDataEnabled = true;
+    protected boolean mPolicyDataEnabled = true;
 
     private boolean[] mDataEnabled = new boolean[DctConstants.APN_NUM_TYPES];
 
@@ -198,6 +220,8 @@ public abstract class DcTrackerBase extends Handler {
     protected PhoneBase mPhone;
     protected UiccController mUiccController;
     protected AtomicReference<IccRecords> mIccRecords = new AtomicReference<IccRecords>();
+    protected AtomicReference<UiccCardApplication> mUiccCardApplication
+            = new AtomicReference<UiccCardApplication>();
     protected DctConstants.Activity mActivity = DctConstants.Activity.NONE;
     protected DctConstants.State mState = DctConstants.State.IDLE;
     protected Handler mDataConnectionTracker = null;
@@ -232,6 +256,9 @@ public abstract class DcTrackerBase extends Handler {
     /** Intent sent when the reconnect alarm fires. */
     protected PendingIntent mReconnectIntent = null;
 
+    /** CID of active data connection */
+    protected int mCidActive;
+
     // When false we will not auto attach and manually attaching is required.
     protected boolean mAutoAttachOnCreationConfig = false;
     protected AtomicBoolean mAutoAttachOnCreation = new AtomicBoolean(false);
@@ -240,9 +267,6 @@ public abstract class DcTrackerBase extends Handler {
     // (TODO: Reconsider tying directly to screen, maybe this is
     //        really a lower power mode")
     protected boolean mIsScreenOn = true;
-
-    // Indicates if we found mvno-specific APNs in the full APN list.
-    protected boolean mMvnoMatched = false;
 
     /** Allows the generation of unique Id's for DataConnection objects */
     protected AtomicInteger mUniqueIdGenerator = new AtomicInteger(0);
@@ -265,6 +289,7 @@ public abstract class DcTrackerBase extends Handler {
 
     /** kept in sync with mApnContexts
      * Higher numbers are higher priority and sorted so highest priority is first */
+   /* ALPS01555724: The implementation of PriorityQueue is incorrect, use arraylist to sort priority.
     protected final PriorityQueue<ApnContext>mPrioritySortedApnContexts =
             new PriorityQueue<ApnContext>(5,
             new Comparator<ApnContext>() {
@@ -272,6 +297,8 @@ public abstract class DcTrackerBase extends Handler {
                     return c2.priority - c1.priority;
                 }
             } );
+     */
+    ArrayList <ApnContext> mPrioritySortedApnContexts = new ArrayList<ApnContext>();
 
     /* Currently active APN */
     protected ApnSetting mActiveApn;
@@ -321,6 +348,60 @@ public abstract class DcTrackerBase extends Handler {
 
     protected AsyncChannel mReplyAc = new AsyncChannel();
 
+    /** M: start */
+    protected static final String PROPERTY_MOBILE_DATA_ENABLE = "persist.radio.mobile.data";
+    protected static final boolean DUALTALK_SPPORT =
+            SystemProperties.getInt("ro.mtk_dt_support", 0) == 1;
+    protected ApnSetting mInitialAttachApnSetting;
+    protected Handler mWorkerHandler;
+    protected boolean mDataRoamingEnabled;
+    private static final String NO_SIM_VALUE = "N/A";
+    private String[] PROPERTY_ICCID = {
+        "ril.iccid.sim1",
+        "ril.iccid.sim2",
+        "ril.iccid.sim3",
+        "ril.iccid.sim4",
+    };
+
+    /** M: end */
+
+    private static final boolean MTK_DUAL_APN_SUPPORT =
+            SystemProperties.get("ro.mtk_dtag_dual_apn_support").equals("1") ? true : false;
+
+    // ensure Settings.Global.MOBILE_DATA is updated.
+    protected int mSettingProviderRetryCount = 0;
+
+    // M: VoLTE Start
+    protected String mSetDataAllowedReason = "";
+    // M: VoLTE End
+
+    /// M: Telephony plugin
+    private static final boolean BSP_PACKAGE =
+            SystemProperties.getBoolean("ro.mtk_bsp_package", false);
+    ITelephonyExt mTelephonyExt;
+
+    // M: [C2K][IRAT] Record initial attach APN for SVLTE, distinguish with
+    // original initial attach APN.
+    // TODO: move C2K logic to OP09 if it is not OM request.
+    protected static final String OPERATOR_NUMERIC_CTLTE = "46011";
+    protected static final String OPERATOR_NUMERIC_VODAFONE = "20404";
+    protected static final String OPERATOR_NUMERIC_HUTCHISON = "45403";
+
+    protected String mSvlteOperatorNumeric;
+    protected ApnSetting mSvlteIaApnSetting;
+
+    // M: [LTE][Low Power][UL traffic shaping] Start
+    protected String mLteAccessStratumDataState = PhoneConstants.LTE_ACCESS_STRATUM_STATE_UNKNOWN;
+    protected static final int mLteAsConnected = 1;
+    protected int mNetworkType = -1;
+    protected boolean mIsLte = false;
+    protected boolean mSharedDefaultApn = false;
+    protected int mDefaultRefCount = 0;
+    // M: [LTE][Low Power][UL traffic shaping] End
+
+    protected boolean mHasPendingInitialApnRequest;
+    protected boolean mIsDuringIrat;
+
     protected BroadcastReceiver mIntentReceiver = new BroadcastReceiver ()
     {
         @Override
@@ -339,8 +420,12 @@ public abstract class DcTrackerBase extends Handler {
                 startNetStatPoll();
                 restartDataStallAlarm();
             } else if (action.startsWith(INTENT_RECONNECT_ALARM)) {
-                if (DBG) log("Reconnect alarm. Previous state was " + mState);
-                onActionIntentReconnectAlarm(intent);
+                //int subId = intent.getIntExtra(PhoneConstants.SUBSCRIPTION_KEY,
+                //        SubscriptionManager.INVALID_SUBSCRIPTION_ID);
+                //if (subId == mPhone.getSubId()) {
+                    if (DBG) log("Reconnect alarm. Previous state was " + mState);
+                    onActionIntentReconnectAlarm(intent);
+                //}
             } else if (action.startsWith(INTENT_RESTART_TRYSETUP_ALARM)) {
                 if (DBG) log("Restart trySetup alarm");
                 onActionIntentRestartTrySetupAlarm(intent);
@@ -364,6 +449,10 @@ public abstract class DcTrackerBase extends Handler {
                 }
                 if (DBG) log("WIFI_STATE_CHANGED_ACTION: enabled=" + enabled
                         + " mIsWifiConnected=" + mIsWifiConnected);
+            } else if (action.equals(TelephonyIntents.ACTION_SIM_STATE_CHANGED)) {
+                // M: SIM records loaded event needs to wait for subId ready,
+                // so trigger onRecordsLoaded should be notified by SubscriptionInfoUpdater.
+                onActionIntentSimStateChanged(intent);
             }
         }
     };
@@ -398,7 +487,7 @@ public abstract class DcTrackerBase extends Handler {
          */
         @Override
         public void onSubscriptionsChanged() {
-            if (DBG) log("SubscriptionListener.onSubscriptionInfoChanged");
+            if (DBG) log("#onSubscriptionsChanged# SubscriptionListener.onSubscriptionInfoChanged start");
             // Set the network type, in case the radio does not restore it.
             int subId = mPhone.getSubId();
             if (SubscriptionManager.isValidSubscriptionId(subId)) {
@@ -410,6 +499,7 @@ public abstract class DcTrackerBase extends Handler {
                         mPhone.getContext());
                 mDataRoamingSettingObserver.register();
             }
+            log("#onSubscriptionsChanged# SubscriptionListener.onSubscriptionInfoChanged end");
         }
     };
 
@@ -425,7 +515,11 @@ public abstract class DcTrackerBase extends Handler {
             if (TelephonyManager.getDefault().getSimCount() == 1) {
                 contentUri = Settings.Global.DATA_ROAMING;
             } else {
-                contentUri = Settings.Global.DATA_ROAMING + mPhone.getSubId();
+                int phoneSubId = mPhone.getSubId();
+                if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                    phoneSubId = SvlteUtils.getSvlteSubIdBySubId(phoneSubId);
+                }
+                contentUri = Settings.Global.DATA_ROAMING + phoneSubId;
             }
 
             mResolver.registerContentObserver(Settings.Global.getUriFor(contentUri), false, this);
@@ -439,7 +533,8 @@ public abstract class DcTrackerBase extends Handler {
         public void onChange(boolean selfChange) {
             // already running on mPhone handler thread
             if (mPhone.getServiceState().getDataRoaming()) {
-                sendMessage(obtainMessage(DctConstants.EVENT_ROAMING_ON));
+                // M: handle data roaming settings access
+                mWorkerHandler.sendEmptyMessage(DctConstants.EVENT_DATA_ROAMING_CHANGED);
             }
         }
     }
@@ -459,10 +554,6 @@ public abstract class DcTrackerBase extends Handler {
         // Get default value from system property or use DEFAULT_MDC_INITIAL_RETRY
         int value = SystemProperties.getInt(
                 Settings.Global.MDC_INITIAL_MAX_RETRY, DEFAULT_MDC_INITIAL_RETRY);
-        if (value == DEFAULT_MDC_INITIAL_RETRY) {
-            value = mPhone.getContext().getResources().getInteger(
-                R.integer.config_mdc_initial_max_retry);
-        }
 
         // Check if its been overridden
         return Settings.Global.getInt(mResolver,
@@ -513,7 +604,11 @@ public abstract class DcTrackerBase extends Handler {
         String reason = intent.getStringExtra(INTENT_RECONNECT_ALARM_EXTRA_REASON);
         String apnType = intent.getStringExtra(INTENT_RECONNECT_ALARM_EXTRA_TYPE);
 
+        // M: modify for svlte, if svlte, need check the real valid subId
         int phoneSubId = mPhone.getSubId();
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            phoneSubId = SvlteUtils.getSvlteSubIdBySubId(phoneSubId);
+        }
         int currSubId = intent.getIntExtra(PhoneConstants.SUBSCRIPTION_KEY,
                 SubscriptionManager.INVALID_SUBSCRIPTION_ID);
         log("onActionIntentReconnectAlarm: currSubId = " + currSubId + " phoneSubId=" + phoneSubId);
@@ -582,6 +677,26 @@ public abstract class DcTrackerBase extends Handler {
         sendMessage(msg);
     }
 
+    // M: SIM records loaded event needs to wait for subId ready,
+    // so trigger onRecordsLoaded should be notified by SubscriptionInfoUpdater.
+    protected void onActionIntentSimStateChanged(Intent intent) {
+        String state = intent.getStringExtra(IccCardConstants.INTENT_KEY_ICC_STATE);
+        int phoneId = intent.getIntExtra(PhoneConstants.PHONE_KEY, PhoneConstants.SIM_ID_1);
+        // As the phoneId is slotId in actual from intent.
+        int curPhoneId = mPhone.getPhoneId();
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            curPhoneId = SvlteUtils.getSvltePhoneIdByPhoneId(curPhoneId);
+        }
+        if (IccCardConstants.INTENT_VALUE_ICC_LOADED.equals(state)
+                && phoneId == curPhoneId) {
+            if (DBG) {
+                log("onActionIntentSimStateChanged: phoneId=" + phoneId +
+                        " state LOADED and record load completed");
+            }
+            sendMessage(obtainMessage(DctConstants.EVENT_RECORDS_LOADED));
+        }
+    }
+
     ConnectivityManager mCm;
 
     /**
@@ -608,8 +723,13 @@ public abstract class DcTrackerBase extends Handler {
         filter.addAction(WifiManager.WIFI_STATE_CHANGED_ACTION);
         filter.addAction(INTENT_DATA_STALL_ALARM);
         filter.addAction(INTENT_PROVISIONING_APN_ALARM);
+        // M: SIM records loaded event needs to wait for subId ready,
+        // so trigger onRecordsLoaded should be notified by SubscriptionInfoUpdater.
+        filter.addAction(TelephonyIntents.ACTION_SIM_STATE_CHANGED);
 
         mUserDataEnabled = getDataEnabled();
+
+        notifyMobileDataChange(mUserDataEnabled ? 1 : 0);
 
         mPhone.getContext().registerReceiver(mIntentReceiver, filter, null, mPhone);
 
@@ -634,6 +754,23 @@ public abstract class DcTrackerBase extends Handler {
         Handler dcHandler = new Handler(dcHandlerThread.getLooper());
         mDcc = DcController.makeDcc(mPhone, this, dcHandler);
         mDcTesterFailBringUpAll = new DcTesterFailBringUpAll(mPhone, dcHandler);
+
+        if (DBG) { log("DualApnSupport = " + MTK_DUAL_APN_SUPPORT); }
+
+        //MTK START: Add Plug in
+        if (!BSP_PACKAGE) {
+            try {
+                mTelephonyExt = MPlugin.createInstance(ITelephonyExt.class.getName(),
+                        mPhone.getContext());
+                mTelephonyExt.init(mPhone.getContext());
+            } catch (Exception e) {
+                if (DBG) {
+                    log("mTelephonyExt init fail");
+                }
+                e.printStackTrace();
+            }
+        }
+        //MTK END
     }
 
     public void dispose() {
@@ -714,7 +851,7 @@ public abstract class DcTrackerBase extends Handler {
                         }
                         return dunSetting;
                     }
-                } else if (mMvnoMatched == false) {
+                } else {
                     if (VDBG) log("fetchDunApn: global TETHER_DUN_APN dunSetting=" + dunSetting);
                     return dunSetting;
                 }
@@ -723,8 +860,6 @@ public abstract class DcTrackerBase extends Handler {
 
         Context c = mPhone.getContext();
         String[] apnArrayData = c.getResources().getStringArray(R.array.config_tether_apndata);
-        if (apnArrayData == null) return null;
-
         for (String apn : apnArrayData) {
             ApnSetting dunSetting = ApnSetting.fromString(apn);
             if (dunSetting != null) {
@@ -737,7 +872,7 @@ public abstract class DcTrackerBase extends Handler {
                         }
                         return dunSetting;
                     }
-                } else if (mMvnoMatched == false) {
+                } else {
                     retDunSetting = dunSetting;
                 }
             }
@@ -777,7 +912,7 @@ public abstract class DcTrackerBase extends Handler {
      * Modify {@link android.provider.Settings.Global#DATA_ROAMING} value.
      */
     public void setDataOnRoamingEnabled(boolean enabled) {
-        final int phoneSubId = mPhone.getSubId();
+        int phoneSubId = mPhone.getSubId();
         if (getDataOnRoamingEnabled() != enabled) {
             int roaming = enabled ? 1 : 0;
 
@@ -785,6 +920,9 @@ public abstract class DcTrackerBase extends Handler {
             if (TelephonyManager.getDefault().getSimCount() == 1) {
                 Settings.Global.putInt(mResolver, Settings.Global.DATA_ROAMING, roaming);
             } else {
+                if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                    phoneSubId = SvlteUtils.getSvlteSubIdBySubId(phoneSubId);
+                }
                 Settings.Global.putInt(mResolver, Settings.Global.DATA_ROAMING + phoneSubId, roaming);
             }
 
@@ -806,9 +944,19 @@ public abstract class DcTrackerBase extends Handler {
      * Return current {@link android.provider.Settings.Global#DATA_ROAMING} value.
      */
     public boolean getDataOnRoamingEnabled() {
+
+        //Plug in
+        if (ignoreDataRoaming()) {
+            log("getDataOnRoamingEnabled, ignore data roaming.");
+            return true;
+        }
+
         boolean isDataRoamingEnabled = "true".equalsIgnoreCase(SystemProperties.get(
                 "ro.com.android.dataroaming", "false"));
-        final int phoneSubId = mPhone.getSubId();
+        int phoneSubId = mPhone.getSubId();
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            phoneSubId = SvlteUtils.getSvlteSubIdBySubId(phoneSubId);
+        }
 
         try {
             // For single SIM phones, this is a per phone property.
@@ -829,16 +977,29 @@ public abstract class DcTrackerBase extends Handler {
         return isDataRoamingEnabled;
     }
 
+    private boolean ignoreDataRoaming() {
+        boolean ignoreDataRoaming = false;
+        try {
+            ignoreDataRoaming = mTelephonyExt.ignoreDataRoaming();
+        } catch (Exception e) {
+            loge("get ignoreDataRoaming fail!");
+            e.printStackTrace();
+        }
+        log("getDataOnRoamingEnabled: " + ignoreDataRoaming);
+        return ignoreDataRoaming;
+    }
+
     /**
      * Modify {@link android.provider.Settings.Global#MOBILE_DATA} value.
      */
     public void setDataEnabled(boolean enable) {
         Message msg = obtainMessage(DctConstants.CMD_SET_USER_DATA_ENABLE);
         msg.arg1 = enable ? 1 : 0;
-        msg.arg2 = mPhone.getSubId();
-        if (DBG) log("setDataEnabled: sendMessage: enable=" + enable +
-                ", subId=" + mPhone.getSubId());
+        if (DBG) log("setDataEnabled: sendMessage: enable=" + enable);
         sendMessage(msg);
+
+        // M: cc33 notify modem the data on/off state
+        mPhone.mCi.setDataOnToMD(enable, null);
     }
 
     /**
@@ -846,24 +1007,104 @@ public abstract class DcTrackerBase extends Handler {
      */
     public boolean getDataEnabled() {
         boolean retVal = "true".equalsIgnoreCase(SystemProperties.get(
-                "ro.com.android.mobiledata", "true"));
+                "ro.com.android.mobiledata", "false"));
         try {
             if (TelephonyManager.getDefault().getSimCount() == 1) {
                 retVal = Settings.Global.getInt(mResolver, Settings.Global.MOBILE_DATA,
                         retVal ? 1 : 0) != 0;
             } else {
                 int phoneSubId = mPhone.getSubId();
-                retVal = TelephonyManager.getIntWithSubId(mResolver, Settings.Global.MOBILE_DATA,
-                        phoneSubId) != 0;
+
+                if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                    phoneSubId = SvlteUtils.getSvlteSubIdBySubId(phoneSubId);
+                }
+
+                log("phoneSubId = " + phoneSubId);
+                retVal = Settings.Global.getInt(mResolver,
+                        Settings.Global.MOBILE_DATA + phoneSubId) != 0;
             }
-            if (DBG) log("getDataEnabled: getIntWithSubId retVal=" + retVal);
-        } catch (SettingNotFoundException snfe) {
-            retVal = "true".equalsIgnoreCase(
-                    SystemProperties.get("ro.com.android.mobiledata", "true"));
             if (DBG) {
-                log("getDataEnabled: system property ro.com.android.mobiledata retVal=" + retVal);
+                log("getDataEnabled: getInt retVal=" + retVal);
+            }
+        } catch (SettingNotFoundException snfe) {
+            // Not found the 'MOBILE_DATA+phoneSubId' setting, we should initialize it.
+            retVal = handleMobileDataSettingNotFound(retVal);
+        }
+        return retVal;
+    }
+
+    private boolean handleMobileDataSettingNotFound(boolean retVal) {
+        log("handleMobileDataSettingNotFound: initial retVal=" + retVal);
+
+        int phoneSubId = mPhone.getSubId();
+        //C2K: get correct sub id
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            phoneSubId = SvlteUtils.getSvlteSubIdBySubId(phoneSubId);
+        }
+        if (!SubscriptionManager.isValidSubscriptionId(phoneSubId)) {
+            log("invalid sub id, return data disabled");
+            return false;
+        }
+
+        retVal = Settings.Global.getInt(mResolver, Settings.Global.MOBILE_DATA,
+                retVal ? 1 : 0) != 0;
+
+        if (!retVal) {
+            setUserDataProperty(false);
+            Settings.Global.putInt(mResolver, Settings.Global.MOBILE_DATA + phoneSubId, 0);
+        } else { // OP02 will have default value of MOBILE_DATA as true
+            int defaultDataSubId = SubscriptionManager.getDefaultDataSubId();
+            log("defaultDataSubId = " + defaultDataSubId);
+            if (defaultDataSubId != SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                // 'MOTA upgrade' will go this way
+                if (phoneSubId == defaultDataSubId) {
+                    setUserDataProperty(true);
+                    Settings.Global.putInt(mResolver,
+                            Settings.Global.MOBILE_DATA + phoneSubId, 1);
+                    retVal = true;
+                } else {
+                    setUserDataProperty(false);
+                    Settings.Global.putInt(mResolver,
+                            Settings.Global.MOBILE_DATA + phoneSubId, 0);
+                    retVal = false;
+                }
+            } else {
+                int insertedStatus = 0;
+                for (int i = 0; i < TelephonyManager.getDefault().getPhoneCount(); i++) {
+                    if (!NO_SIM_VALUE.equals(SystemProperties.get(PROPERTY_ICCID[i]))) {
+                        insertedStatus = insertedStatus | (1 << i);
+                    }
+                }
+                log("insertedStatus = " + insertedStatus);
+                if (insertedStatus == 1 || insertedStatus == 3) {
+                    if (mPhone.getPhoneId() == 0) {
+                        setUserDataProperty(true);
+                        Settings.Global.putInt(mResolver,
+                                Settings.Global.MOBILE_DATA + phoneSubId, 1);
+                        retVal = true;
+                    } else {
+                        setUserDataProperty(false);
+                        Settings.Global.putInt(mResolver,
+                                Settings.Global.MOBILE_DATA + phoneSubId, 0);
+                        retVal = false;
+                    }
+                } else if (insertedStatus == 2) {
+                    if (mPhone.getPhoneId() == 1) {
+                        setUserDataProperty(true);
+                        Settings.Global.putInt(mResolver,
+                                Settings.Global.MOBILE_DATA + phoneSubId, 1);
+                        retVal = true;
+                    } else {
+                        setUserDataProperty(false);
+                        Settings.Global.putInt(mResolver,
+                                Settings.Global.MOBILE_DATA + phoneSubId, 0);
+                        retVal = false;
+                    }
+                }
             }
         }
+
+        log("handleMobileDataSettingNotFound: after retVal=" + retVal);
         return retVal;
     }
 
@@ -885,19 +1126,30 @@ public abstract class DcTrackerBase extends Handler {
     protected abstract void onRadioOffOrNotAvailable();
     protected abstract void onDataSetupComplete(AsyncResult ar);
     protected abstract void onDataSetupCompleteError(AsyncResult ar);
-    protected abstract void onDisconnectDone(AsyncResult ar);
-    protected abstract void onDisconnectDcRetrying(AsyncResult ar);
+    protected abstract void onDisconnectDone(int connId, AsyncResult ar);
+    protected abstract void onDisconnectDcRetrying(int connId, AsyncResult ar);
     protected abstract void onVoiceCallStarted();
+    protected abstract void onVoiceCallStartedPeer();
     protected abstract void onVoiceCallEnded();
+    protected abstract void onVoiceCallEndedPeer();
     protected abstract void onCleanUpConnection(boolean tearDown, int apnId, String reason);
     protected abstract void onCleanUpAllConnections(String cause);
     public abstract boolean isDataPossible(String apnType);
-    protected abstract boolean onUpdateIcc();
+    protected abstract void onUpdateIcc();
     protected abstract void completeConnection(ApnContext apnContext);
     public abstract void setDataAllowed(boolean enable, Message response);
     public abstract String[] getPcscfAddress(String apnType);
     public abstract void setImsRegistrationState(boolean registered);
     protected abstract boolean isPermanentFail(DcFailCause dcFailCause);
+    public abstract void deactivatePdpByCid(int cid); // MTK
+
+    // M: VoLTE Start
+    public abstract boolean isOnlyIMSorEIMSPdnConnected();
+    // M: VoLTE End
+
+    // M: [LTE][Low Power][UL traffic shaping] Start
+    protected abstract void onSharedDefaultApnState(int newDefaultRefCount);
+    // M: [LTE][Low Power][UL traffic shaping] End
 
     @Override
     public void handleMessage(Message msg) {
@@ -942,6 +1194,7 @@ public abstract class DcTrackerBase extends Handler {
                 break;
 
             case DctConstants.EVENT_DATA_SETUP_COMPLETE:
+                mCidActive = msg.arg1;
                 onDataSetupComplete((AsyncResult) msg.obj);
                 break;
 
@@ -951,12 +1204,12 @@ public abstract class DcTrackerBase extends Handler {
 
             case DctConstants.EVENT_DISCONNECT_DONE:
                 log("DataConnectionTracker.handleMessage: EVENT_DISCONNECT_DONE msg=" + msg);
-                onDisconnectDone((AsyncResult) msg.obj);
+                onDisconnectDone(msg.arg1, (AsyncResult) msg.obj);
                 break;
 
             case DctConstants.EVENT_DISCONNECT_DC_RETRYING:
                 log("DataConnectionTracker.handleMessage: EVENT_DISCONNECT_DC_RETRYING msg=" + msg);
-                onDisconnectDcRetrying((AsyncResult) msg.obj);
+                onDisconnectDcRetrying(msg.arg1, (AsyncResult) msg.obj);
                 break;
 
             case DctConstants.EVENT_VOICE_CALL_STARTED:
@@ -965,6 +1218,16 @@ public abstract class DcTrackerBase extends Handler {
 
             case DctConstants.EVENT_VOICE_CALL_ENDED:
                 onVoiceCallEnded();
+                break;
+
+            //M: handle peer phone call state
+            case DctConstants.EVENT_VOICE_CALL_STARTED_PEER:
+                log("EVENT_VOICE_CALL_STARTED_PEER");
+                onVoiceCallStartedPeer();
+                break;
+            case DctConstants.EVENT_VOICE_CALL_ENDED_PEER:
+                log("EVENT_VOICE_CALL_ENDED_PEER");
+                onVoiceCallEndedPeer();
                 break;
 
             case DctConstants.EVENT_CLEAN_UP_ALL_CONNECTIONS: {
@@ -988,9 +1251,8 @@ public abstract class DcTrackerBase extends Handler {
             }
             case DctConstants.CMD_SET_USER_DATA_ENABLE: {
                 final boolean enabled = (msg.arg1 == DctConstants.ENABLED) ? true : false;
-                final int subId = msg.arg2;
-                if (DBG) log("CMD_SET_USER_DATA_ENABLE enabled=" + enabled + ", subId=" + subId);
-                onSetUserDataEnabled(enabled, subId);
+                if (DBG) log("CMD_SET_USER_DATA_ENABLE enabled=" + enabled);
+                onSetUserDataEnabled(enabled);
                 break;
             }
             case DctConstants.CMD_SET_DEPENDENCY_MET: {
@@ -1129,6 +1391,26 @@ public abstract class DcTrackerBase extends Handler {
                 }
                 break;
             }
+            //Reset Attach Apn
+            case DctConstants.EVENT_RESET_ATTACH_APN: {
+                if (mAllApnSettings != null && !mAllApnSettings.isEmpty()) {
+                    setInitialAttachApn();
+                } else {
+                    if (DBG) {
+                        log("EVENT_RESET_ATTACH_APN: Ignore due to null APN list");
+                    }
+                }
+                break;
+            }
+
+            //M: [LTE][Low Power][UL traffic shaping] Start
+            case DctConstants.EVENT_DEFAULT_APN_REFERENCE_COUNT_CHANGED: {
+                int newDefaultRefCount = msg.arg1;
+                onSharedDefaultApnState(newDefaultRefCount);
+                break;
+            }
+            //M: [LTE][Low Power][UL traffic shaping] End
+
             default:
                 Rlog.e("DATA", "Unidentified event msg=" + msg);
                 break;
@@ -1144,7 +1426,7 @@ public abstract class DcTrackerBase extends Handler {
     public boolean getAnyDataEnabled() {
         final boolean result;
         synchronized (mDataEnabledLock) {
-            result = (mInternalDataEnabled && mUserDataEnabled && sPolicyDataEnabled
+            result = (mInternalDataEnabled && mUserDataEnabled && mPolicyDataEnabled
                     && (mEnabledCount != 0));
         }
         if (!result && DBG) log("getAnyDataEnabled " + result);
@@ -1181,6 +1463,22 @@ public abstract class DcTrackerBase extends Handler {
             return DctConstants.APN_IA_ID;
         } else if (TextUtils.equals(type, PhoneConstants.APN_TYPE_EMERGENCY)) {
             return DctConstants.APN_EMERGENCY_ID;
+        /** M: start */
+        } else if (TextUtils.equals(type, PhoneConstants.APN_TYPE_DM)) {
+            return DctConstants.APN_DM_ID;
+        } else if (TextUtils.equals(type, PhoneConstants.APN_TYPE_NET)) {
+            return DctConstants.APN_NET_ID;
+        } else if (TextUtils.equals(type, PhoneConstants.APN_TYPE_WAP)) {
+            return DctConstants.APN_WAP_ID;
+        } else if (TextUtils.equals(type, PhoneConstants.APN_TYPE_CMMAIL)) {
+            return DctConstants.APN_CMMAIL_ID;
+        } else if (TextUtils.equals(type, PhoneConstants.APN_TYPE_RCSE)) {
+            return DctConstants.APN_RCSE_ID;
+        } else if ((TextUtils.equals(type, PhoneConstants.APN_TYPE_XCAP))) {
+            return DctConstants.APN_XCAP_ID;
+        } else if (TextUtils.equals(type, PhoneConstants.APN_TYPE_RCS)) {
+            return DctConstants.APN_RCS_ID;
+        /** M: end */
         } else {
             return DctConstants.APN_INVALID_ID;
         }
@@ -1208,6 +1506,22 @@ public abstract class DcTrackerBase extends Handler {
             return PhoneConstants.APN_TYPE_IA;
         case DctConstants.APN_EMERGENCY_ID:
             return PhoneConstants.APN_TYPE_EMERGENCY;
+        /** M: start */
+        case DctConstants.APN_DM_ID:
+            return PhoneConstants.APN_TYPE_DM;
+        case DctConstants.APN_NET_ID:
+            return PhoneConstants.APN_TYPE_NET;
+        case DctConstants.APN_WAP_ID:
+            return PhoneConstants.APN_TYPE_WAP;
+        case DctConstants.APN_CMMAIL_ID:
+            return PhoneConstants.APN_TYPE_CMMAIL;
+        case DctConstants.APN_RCSE_ID:
+            return PhoneConstants.APN_TYPE_RCSE;
+        case DctConstants.APN_XCAP_ID:
+            return PhoneConstants.APN_TYPE_XCAP;
+        case DctConstants.APN_RCS_ID:
+            return PhoneConstants.APN_TYPE_RCS;
+        /** M: end */
         default:
             log("Unknown id (" + id + ") in apnIdToType");
             return PhoneConstants.APN_TYPE_DEFAULT;
@@ -1380,21 +1694,74 @@ public abstract class DcTrackerBase extends Handler {
     public abstract boolean isDisconnected();
 
     protected void onSetUserDataEnabled(boolean enabled) {
-        onSetUserDataEnabled(enabled, mPhone.getSubId());
-    }
-
-    protected void onSetUserDataEnabled(boolean enabled, int subId) {
         synchronized (mDataEnabledLock) {
-            // For single SIM phones, this is a per phone property.
-            if (TelephonyManager.getDefault().getSimCount() == 1) {
-                Settings.Global.putInt(mResolver, Settings.Global.MOBILE_DATA, enabled ? 1 : 0);
-            } else {
-                Settings.Global.putInt(mResolver, Settings.Global.MOBILE_DATA + subId,
-                        enabled ? 1 : 0);
-            }
-
             if (mUserDataEnabled != enabled) {
                 mUserDataEnabled = enabled;
+
+                // For single SIM phones, this is a per phone property.
+                if (TelephonyManager.getDefault().getSimCount() == 1) {
+                    Settings.Global.putInt(mResolver, Settings.Global.MOBILE_DATA, enabled ? 1 : 0);
+                } else {
+                    int phoneSubId = mPhone.getSubId();
+                    //C2K: get correct sub id
+                    if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                        phoneSubId = SvlteUtils.getSvlteSubIdBySubId(phoneSubId);
+                    }
+                    Settings.Global.putInt(mResolver, Settings.Global.MOBILE_DATA + phoneSubId,
+                            enabled ? 1 : 0);
+                }
+
+                //M:
+                setUserDataProperty(enabled);
+                notifyMobileDataChange(enabled ? 1 : 0);
+
+                // M: [C2K][IRAT] modify start. @{
+                SubscriptionController subController = SubscriptionController.getInstance();
+                final int defaultDataPhoneId = subController.getPhoneId(
+                        subController.getDefaultDataSubId());
+                int curPhoneId = mPhone.getPhoneId();
+
+                if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                    //Convert SVLTE_DC_PHONE_ID to normal id
+                    curPhoneId = SvlteUtils.getSvltePhoneIdByPhoneId(curPhoneId);
+                }
+                if (defaultDataPhoneId != curPhoneId) {
+                    log("Current phone is not default phone");
+                    return;
+                }
+                // M: }@
+
+                // ensure Settings.Global.MOBILE_DATA is updated.
+                boolean readEnabled = false;
+                if (TelephonyManager.getDefault().getSimCount() == 1) {
+                    readEnabled = Settings.Global.getInt(mResolver,
+                            Settings.Global.MOBILE_DATA, enabled ? 1 : 0) == 1;
+                } else {
+                    int phoneSubId = mPhone.getSubId();
+                    //C2K: get correct sub id
+                    if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                        phoneSubId = SvlteUtils.getSvlteSubIdBySubId(phoneSubId);
+                    }
+                    readEnabled = Settings.Global.getInt(mResolver,
+                            Settings.Global.MOBILE_DATA + phoneSubId, enabled ? 1 : 0) == 1;
+                }
+                if (readEnabled != enabled && mSettingProviderRetryCount < 10) {
+                    log("onSetUserDataEnabled(): readEnabled = " + readEnabled +
+                            ", mSettingProviderRetryCount = " + mSettingProviderRetryCount);
+
+                    // M: restore this parameter to prev state
+                    log("write to setting un-sync! re-send msg CMD_SET_USER_DATA_ENABLE");
+                    mUserDataEnabled = !enabled;
+
+                    Message msg = obtainMessage(DctConstants.CMD_SET_USER_DATA_ENABLE);
+                    msg.arg1 = (enabled ? DctConstants.ENABLED : DctConstants.DISABLED);
+                    sendMessageDelayed(msg, 500);
+
+                    mSettingProviderRetryCount++;
+                    return;
+                }
+                mSettingProviderRetryCount = 0;
+
                 if (getDataOnRoamingEnabled() == false &&
                         mPhone.getServiceState().getDataRoaming() == true) {
                     if (enabled) {
@@ -1407,7 +1774,18 @@ public abstract class DcTrackerBase extends Handler {
                 if (enabled) {
                     onTrySetupData(Phone.REASON_DATA_ENABLED);
                 } else {
-                    onCleanUpAllConnections(Phone.REASON_DATA_SPECIFIC_DISABLED);
+                    boolean isBsp = SystemProperties.getBoolean("ro.mtk_bsp_package", false);
+                    if (isBsp) {
+                        onCleanUpAllConnections(Phone.REASON_DATA_SPECIFIC_DISABLED);
+                    } else {
+                         for (ApnContext apnContext : mApnContexts.values()) {
+                            if (!isDataAllowedAsOff(apnContext.getApnType())) {
+                                apnContext.setReason(Phone.REASON_DATA_SPECIFIC_DISABLED);
+                                onCleanUpConnection(true, apnTypeToId(apnContext.getApnType())
+                                        , Phone.REASON_DATA_SPECIFIC_DISABLED);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1419,8 +1797,8 @@ public abstract class DcTrackerBase extends Handler {
     protected void onSetPolicyDataEnabled(boolean enabled) {
         synchronized (mDataEnabledLock) {
             final boolean prevEnabled = getAnyDataEnabled();
-            if (sPolicyDataEnabled != enabled) {
-                sPolicyDataEnabled = enabled;
+            if (mPolicyDataEnabled != enabled) {
+                mPolicyDataEnabled = enabled;
                 if (prevEnabled != getAnyDataEnabled()) {
                     if (!prevEnabled) {
                         onTrySetupData(Phone.REASON_DATA_ENABLED);
@@ -1431,6 +1809,66 @@ public abstract class DcTrackerBase extends Handler {
             }
         }
     }
+
+    // M: [LTE][Low Power][UL traffic shaping] Start
+    public void onSetLteAccessStratumReport(boolean enabled, Message response) {
+        mPhone.mCi.setLteAccessStratumReport(enabled, response);
+    }
+
+    public void onSetLteUplinkDataTransfer(int timeMillis, Message response) {
+        for(ApnContext apnContext : mApnContexts.values()) {
+            if(PhoneConstants.APN_TYPE_DEFAULT.equals(apnContext.getApnType())) {
+                try {
+                    int interfaceId = apnContext.getDcAc().getCidSync();
+                    mPhone.mCi.setLteUplinkDataTransfer(timeMillis, interfaceId, response);
+                } catch (Exception e) {
+                    loge("getDcAc fail!");
+                    e.printStackTrace();
+                    if (response != null) {
+                        AsyncResult.forMessage(response, null,
+                                new CommandException(CommandException.Error.GENERIC_FAILURE));
+                        response.sendToTarget();
+                    }
+                }
+            }
+        }
+    }
+
+    protected void notifyLteAccessStratumChanged(int lteAccessStratumDataState) {
+        mLteAccessStratumDataState = (lteAccessStratumDataState == 1) ?
+                PhoneConstants.LTE_ACCESS_STRATUM_STATE_CONNECTED :
+                PhoneConstants.LTE_ACCESS_STRATUM_STATE_IDLE;
+        if (DBG) {
+            log("notifyLteAccessStratumChanged mLteAccessStratumDataState = "
+                    + mLteAccessStratumDataState);
+        }
+        mPhone.notifyLteAccessStratumChanged(mLteAccessStratumDataState);
+    }
+
+    protected void notifyPsNetworkTypeChanged(int newRilNwType) {
+        int newNwType = mPhone.getServiceState().rilRadioTechnologyToNetworkTypeEx(newRilNwType);
+        if (DBG) {
+            log("notifyPsNetworkTypeChanged mNetworkType = " + mNetworkType
+                    + ", newNwType = " + newNwType
+                    + ", newRilNwType = " + newRilNwType);
+        }
+        if (newNwType != mNetworkType) {
+            mNetworkType = newNwType;
+            mPhone.notifyPsNetworkTypeChanged(mNetworkType);
+        }
+    }
+
+    protected void notifySharedDefaultApn(boolean mSharedDefaultApn) {
+    }
+
+    public String getLteAccessStratumState() {
+        return mLteAccessStratumDataState;
+    }
+
+    public boolean isSharedDefaultApn() {
+        return mSharedDefaultApn;
+    }
+    // M: [LTE][Low Power][UL traffic shaping] End
 
     protected String getReryConfig(boolean forDefault) {
         int nt = mPhone.getServiceState().getNetworkType();
@@ -1456,6 +1894,7 @@ public abstract class DcTrackerBase extends Handler {
     protected void resetPollStats() {
         mTxPkts = -1;
         mRxPkts = -1;
+        mActivity = DctConstants.Activity.NONE;
         mNetStatPollPeriod = POLL_NETSTAT_MILLIS;
     }
 
@@ -1601,6 +2040,14 @@ public abstract class DcTrackerBase extends Handler {
                 break;
             case RecoveryAction.CLEANUP:
                 EventLog.writeEvent(EventLogTags.DATA_STALL_RECOVERY_CLEANUP, mSentSinceLastRecv);
+                /* M: Start - abnormal event logging for logger */
+                Intent intent = new Intent(
+                TelephonyIntents.ACTION_EXCEPTION_HAPPENED);
+                intent.putExtra("Reason", "SmartLogging");
+                intent.putExtra("from_where", "DCT");
+                mPhone.getContext().sendBroadcast(intent);
+                log("Broadcast for SmartLogging - NO DATA");
+                /* M: End - abnormal event logging for logger */
                 if (DBG) log("doRecovery() cleanup all connections");
                 cleanUpAllConnections(Phone.REASON_PDP_RESET);
                 putRecoveryAction(RecoveryAction.REREGISTER);
@@ -1609,7 +2056,14 @@ public abstract class DcTrackerBase extends Handler {
                 EventLog.writeEvent(EventLogTags.DATA_STALL_RECOVERY_REREGISTER,
                         mSentSinceLastRecv);
                 if (DBG) log("doRecovery() re-register");
-                mPhone.getServiceStateTracker().reRegisterNetwork(null);
+
+                /** M: re-register PS domain only
+                 *  Not to use mPhone.getServiceStateTracker().reRegisterNetwork
+                 *  Re-register may not be triggered by it and both CS and PS could be impacted
+                 *  Let DctController disconnect all data connections and trigger re-attach
+                 */
+                DctController.getInstance().disconnectAll();
+
                 putRecoveryAction(RecoveryAction.RADIO_RESTART);
                 break;
             case RecoveryAction.RADIO_RESTART:
@@ -1669,7 +2123,7 @@ public abstract class DcTrackerBase extends Handler {
             mSentSinceLastRecv = 0;
             putRecoveryAction(RecoveryAction.GET_DATA_CALL_LIST);
         } else if (sent > 0 && received == 0) {
-            if (isPhoneStateIdle()) {
+            if (mPhone.getState() == PhoneConstants.State.IDLE) {
                 mSentSinceLastRecv += sent;
             } else {
                 mSentSinceLastRecv = 0;
@@ -1685,17 +2139,6 @@ public abstract class DcTrackerBase extends Handler {
         } else {
             if (VDBG_STALL) log("updateDataStallInfo: NONE");
         }
-    }
-
-    private boolean isPhoneStateIdle() {
-        for (int i = 0; i < TelephonyManager.getDefault().getPhoneCount(); i++ ) {
-            Phone phone = PhoneFactory.getPhone(i);
-            if (phone != null && phone.getState() != PhoneConstants.State.IDLE) {
-                log("isPhoneStateIdle: Voice call active on sub: " + i);
-                return false;
-            }
-        }
-        return true;
     }
 
     protected void onDataStallAlarm(int tag) {
@@ -1716,8 +2159,12 @@ public abstract class DcTrackerBase extends Handler {
             if (DBG) {
                 log("onDataStallAlarm: tag=" + tag + " do recovery action=" + getRecoveryAction());
             }
-            suspectedStall = DATA_STALL_SUSPECTED;
-            sendMessage(obtainMessage(DctConstants.EVENT_DO_RECOVERY));
+            if (isOnlyIMSorEIMSPdnConnected()) {
+                log("only IMS or EIMS Connected, skip onDataStallAlarm");
+            } else {
+                suspectedStall = DATA_STALL_SUSPECTED;
+                sendMessage(obtainMessage(DctConstants.EVENT_DO_RECOVERY));
+            }
         } else {
             if (VDBG_STALL) {
                 log("onDataStallAlarm: tag=" + tag + " Sent " + String.valueOf(mSentSinceLastRecv) +
@@ -1732,6 +2179,25 @@ public abstract class DcTrackerBase extends Handler {
         int delayInMs;
 
         if (mDataStallDetectionEnabled && getOverallState() == DctConstants.State.CONNECTED) {
+            try {
+                ITelephonyEx iTelEx = ITelephonyEx.Stub.asInterface(
+                        ServiceManager.getService(Context.TELEPHONY_SERVICE_EX));
+
+                if (null == iTelEx) {
+                    loge("startDataStallAlarm iTelEx is null");
+                    return;
+                }
+
+                int slotId = SubscriptionManager.getSlotId(mPhone.getSubId());
+                if (SubscriptionManager.isValidSlotId(slotId) && iTelEx.isTestIccCard(slotId)) {
+                    loge("startDataStallAlarm but skip due to test SIM is detected");
+                    return;
+                }
+            } catch (RemoteException ex) {
+                loge("startDataStallAlarm test SIM detection fail");
+                ex.printStackTrace();
+            }
+
             // If screen is on or data stall is currently suspected, set the alarm
             // with an aggresive timeout.
             if (mIsScreenOn || suspectedStall || RecoveryAction.isAggressiveRecovery(nextAction)) {
@@ -1751,6 +2217,8 @@ public abstract class DcTrackerBase extends Handler {
             }
             Intent intent = new Intent(INTENT_DATA_STALL_ALARM);
             intent.putExtra(DATA_STALL_ALARM_TAG_EXTRA, mDataStallAlarmTag);
+            intent.putExtra(PhoneConstants.SUBSCRIPTION_KEY, getSubId()); // M: add sub information
+
             mDataStallAlarmIntent = PendingIntent.getBroadcast(mPhone.getContext(), 0, intent,
                     PendingIntent.FLAG_UPDATE_CURRENT);
             mAlarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP,
@@ -1790,23 +2258,71 @@ public abstract class DcTrackerBase extends Handler {
     }
 
     protected void setInitialAttachApn() {
-        setInitialAttachApn(mAllApnSettings, mPreferredApn);
-    }
+        // M:[C2K][IRAT] Set initial attach APN for SVLTE. {@
+        if (mPhone.getPhoneType() == PhoneConstants.PHONE_TYPE_CDMA) {
+            if (CdmaFeatureOptionUtils.isCdmaLteDcSupport() && SvlteUtils.isActiveSvlteMode(mPhone)
+                    && mSvlteOperatorNumeric != null) {
+                setInitialAttachApnForSvlte();
+            } else {
+                log("[IRAT_DcTracker] DO NOT setInitialApn for CDMA: numeric = "
+                        + mSvlteOperatorNumeric);
+            }
+            return;
+        } else if (mPhone.getPhoneType() == PhoneConstants.PHONE_TYPE_GSM) {
+            log("[IRAT_DcTracker] GSM setInitialAttachApn: numeric = "
+                    + mSvlteOperatorNumeric);
+            if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()
+                    && SvlteUtils.isActiveSvlteMode(mPhone)) {
+                if (mSvlteOperatorNumeric != null) {
+                    // Since only CTLTE/Empty APN can be used to attach LTE
+                    // network for CT network, only set CTLTE as initial attach.
+                    if (OPERATOR_NUMERIC_CTLTE.equals(mSvlteOperatorNumeric)) {
+                        setInitialAttachApnForSvlte();
+                        return;
+                    }
+                    // Else if the SIM is not CT card(not equals 46011), follow
+                    // the default flow.
+                } else {
+                    // Do nothing since LTE records is not loaded yet.
+                    log("[IRAT_DcTracker] GSM ignore IA because SIM not loaded.");
+                    IccRecords r = mIccRecords.get();
+                    String operatorNumeric = (r != null) ? r.getOperatorNumeric() : "";
+                    if (operatorNumeric == null || operatorNumeric.length() == 0) {
+                        log("setInitialApn: but no operator numeric");
+                        return;
+                    }
+                }
+            }
+        }
+        // M: @}
 
-    protected void setInitialAttachApn(ArrayList <ApnSetting> apnList,
-            ApnSetting preferredApn) {
+        ApnSetting previousAttachApn = mInitialAttachApnSetting;
+        IccRecords r = mIccRecords.get();
+        String operatorNumeric = (r != null) ? r.getOperatorNumeric() : "";
+        if (operatorNumeric == null || operatorNumeric.length() == 0) {
+            log("setInitialApn: but no operator numeric");
+            return;
+        }
+
+        String[] dualApnPlmnList = null;
+        if (MTK_DUAL_APN_SUPPORT == true) {
+            dualApnPlmnList = mPhone.getContext().getResources()
+                        .getStringArray(com.mediatek.internal.R.array.dtag_dual_apn_plmn_list);
+        }
+
+        log("setInitialApn: current attach Apn [" + mInitialAttachApnSetting + "]");
         ApnSetting iaApnSetting = null;
         ApnSetting defaultApnSetting = null;
         ApnSetting firstApnSetting = null;
 
-        log("setInitialApn: E preferredApn=" + preferredApn);
+        log("setInitialApn: E mPreferredApn=" + mPreferredApn);
 
-        if (apnList != null && !apnList.isEmpty()) {
-            firstApnSetting = apnList.get(0);
+        if (mAllApnSettings != null && !mAllApnSettings.isEmpty()) {
+            firstApnSetting = mAllApnSettings.get(0);
             log("setInitialApn: firstApnSetting=" + firstApnSetting);
 
             // Search for Initial APN setting and the first apn that can handle default
-            for (ApnSetting apn : apnList) {
+            for (ApnSetting apn : mAllApnSettings) {
                 // Can't use apn.canHandleType(), as that returns true for APNs that have no type.
                 if (ArrayUtils.contains(apn.types, PhoneConstants.APN_TYPE_IA) &&
                         apn.carrierEnabled) {
@@ -1829,30 +2345,46 @@ public abstract class DcTrackerBase extends Handler {
         //   3) The first apn that than handle APN_TYPE_DEFAULT
         //   4) The first APN we can find.
 
-        ApnSetting initialAttachApnSetting = null;
+        mInitialAttachApnSetting = null;
         if (iaApnSetting != null) {
             if (DBG) log("setInitialAttachApn: using iaApnSetting");
-            initialAttachApnSetting = iaApnSetting;
-        } else if (preferredApn != null) {
-            if (DBG) log("setInitialAttachApn: using preferredApn");
-            initialAttachApnSetting = preferredApn;
+            mInitialAttachApnSetting = iaApnSetting;
+        } else if (mPreferredApn != null) {
+            if (DBG) log("setInitialAttachApn: using mPreferredApn");
+            mInitialAttachApnSetting = mPreferredApn;
         } else if (defaultApnSetting != null) {
             if (DBG) log("setInitialAttachApn: using defaultApnSetting");
-            initialAttachApnSetting = defaultApnSetting;
+            mInitialAttachApnSetting = defaultApnSetting;
         } else if (firstApnSetting != null) {
             if (DBG) log("setInitialAttachApn: using firstApnSetting");
-            initialAttachApnSetting = firstApnSetting;
+            mInitialAttachApnSetting = firstApnSetting;
         }
 
-        if (initialAttachApnSetting == null) {
-            if (DBG) log("setInitialAttachApn: X There in no available apn");
+        if (mInitialAttachApnSetting == null) {
+            if (operatorNumeric == null) {
+                if (DBG) log("setInitialAttachApn: but no operator and no available apn");
+            } else {
+                if (DBG) log("setInitialAttachApn: X There in no available apn, use empty");
+                IaExtendParam param = new IaExtendParam(operatorNumeric, dualApnPlmnList);
+                mPhone.mCi.setInitialAttachApn("", RILConstants.SETUP_DATA_PROTOCOL_IP, -1, "", "",
+                        (Object) param, null);
+            }
         } else {
-            if (DBG) log("setInitialAttachApn: X selected Apn=" + initialAttachApnSetting);
+            if (operatorNumeric == null) {
+                if (DBG) log("setInitialAttachApn: but no operator");
+            } else {
+                if (DBG) log("setInitialAttachApn: X selected Apn=" + mInitialAttachApnSetting);
+                IaExtendParam param = new IaExtendParam(operatorNumeric,
+                        mInitialAttachApnSetting.canHandleType(PhoneConstants.APN_TYPE_IMS),
+                        dualApnPlmnList);
 
-            mPhone.mCi.setInitialAttachApn(initialAttachApnSetting.apn,
-                    initialAttachApnSetting.protocol, initialAttachApnSetting.authType,
-                    initialAttachApnSetting.user, initialAttachApnSetting.password, null);
+                mPhone.mCi.setInitialAttachApn(mInitialAttachApnSetting.apn,
+                        mInitialAttachApnSetting.protocol, mInitialAttachApnSetting.authType,
+                        mInitialAttachApnSetting.user, mInitialAttachApnSetting.password,
+                        (Object) param, null);
+            }
         }
+        if (DBG) log("setInitialAttachApn: new attach Apn [" + mInitialAttachApnSetting + "]");
     }
 
     protected void setDataProfilesAsNeeded() {
@@ -1910,6 +2442,8 @@ public abstract class DcTrackerBase extends Handler {
         }
         Intent intent = new Intent(INTENT_PROVISIONING_APN_ALARM);
         intent.putExtra(PROVISIONING_APN_ALARM_TAG_EXTRA, mProvisioningApnAlarmTag);
+        intent.putExtra(PhoneConstants.SUBSCRIPTION_KEY, getSubId()); // M: add sub information
+
         mProvisioningApnAlarmIntent = PendingIntent.getBroadcast(mPhone.getContext(), 0, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT);
         mAlarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP,
@@ -1943,6 +2477,74 @@ public abstract class DcTrackerBase extends Handler {
         sendMessage(msg);
     }
 
+    //MTK START
+    protected boolean isDataAllowedAsOff(String apnType) {
+        return false;
+    }
+
+    protected void notifyMobileDataChange(int enabled) {
+        log("notifyMobileDataChange, enable = " + enabled);
+        Intent intent = new Intent(DataSubSelector.ACTION_MOBILE_DATA_ENABLE);
+        intent.putExtra(DataSubSelector.EXTRA_MOBILE_DATA_ENABLE_REASON, enabled);
+        mPhone.getContext().sendBroadcast(intent);
+    }
+
+    protected ConcurrentHashMap<String, ApnContext> getApnContexts() {
+        return mApnContexts;
+    }
+
+    private void setUserDataProperty(boolean enabled) {
+        int phoneId = mPhone.getPhoneId();
+        String dataOnIccid = "0";
+
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            phoneId = SvlteUtils.getSvltePhoneIdByPhoneId(phoneId);
+        }
+
+        if (!SubscriptionManager.isValidPhoneId(phoneId)) {
+            log("invalid phone id, don't update");
+            return;
+        }
+
+        if (enabled) {
+            dataOnIccid = SystemProperties.get(PROPERTY_ICCID[phoneId], "0");
+        }
+
+        log("setUserDataProperty:" + dataOnIccid);
+        TelephonyManager.getDefault().setTelephonyProperty(phoneId, PROPERTY_MOBILE_DATA_ENABLE,
+                dataOnIccid);
+    }
+    //MTK END
+
+    // C2K IRAT START
+    protected boolean isDuringIrat() {
+        return mIsDuringIrat;
+    }
+
+    private void setInitialAttachApnForSvlte() {
+        if (isDuringIrat()) {
+            log("[IRAT_DcTracker] Pend setInitialApn due to IRAT is on-going");
+            mHasPendingInitialApnRequest = true;
+            return;
+        }
+
+        PhoneBase ltePhone = SvlteUtils.getSvltePhoneProxy(mPhone.getPhoneId()).getLtePhone();
+        log("[IRAT_DcTracker] setInitialAttachApnForSvlte: apn = "
+                + mSvlteIaApnSetting);
+         IaExtendParam param = new IaExtendParam(mSvlteOperatorNumeric);
+        if (mSvlteIaApnSetting == null) {
+            ltePhone.mCi.setInitialAttachApn("",
+                    RILConstants.SETUP_DATA_PROTOCOL_IP, -1, "", "", (Object) param, null);
+        } else {
+            param.mCanHandleIms = mSvlteIaApnSetting.canHandleType(PhoneConstants.APN_TYPE_IMS);
+            ltePhone.mCi.setInitialAttachApn(mSvlteIaApnSetting.apn,
+                    mSvlteIaApnSetting.protocol, mSvlteIaApnSetting.authType,
+                    mSvlteIaApnSetting.user, mSvlteIaApnSetting.password,
+                    (Object) param, null);
+        }
+    }
+    // C2K IRAT END
+
     public boolean getAutoAttachOnCreation() {
         return mAutoAttachOnCreation.get();
     }
@@ -1952,7 +2554,7 @@ public abstract class DcTrackerBase extends Handler {
         pw.println(" RADIO_TESTS=" + RADIO_TESTS);
         pw.println(" mInternalDataEnabled=" + mInternalDataEnabled);
         pw.println(" mUserDataEnabled=" + mUserDataEnabled);
-        pw.println(" sPolicyDataEnabed=" + sPolicyDataEnabled);
+        pw.println(" sPolicyDataEnabed=" + mPolicyDataEnabled);
         pw.println(" mDataEnabled:");
         for(int i=0; i < mDataEnabled.length; i++) {
             pw.printf("  mDataEnabled[%d]=%b\n", i, mDataEnabled[i]);
@@ -1975,6 +2577,7 @@ public abstract class DcTrackerBase extends Handler {
         pw.println(" mResolver=" + mResolver);
         pw.println(" mIsWifiConnected=" + mIsWifiConnected);
         pw.println(" mReconnectIntent=" + mReconnectIntent);
+        pw.println(" mCidActive=" + mCidActive);
         pw.println(" mAutoAttachOnCreation=" + mAutoAttachOnCreation.get());
         pw.println(" mIsScreenOn=" + mIsScreenOn);
         pw.println(" mUniqueIdGenerator=" + mUniqueIdGenerator);
@@ -2042,4 +2645,5 @@ public abstract class DcTrackerBase extends Handler {
         pw.println(" mDataRoamingSettingObserver=" + mDataRoamingSettingObserver);
         pw.flush();
     }
+
 }

@@ -1,5 +1,10 @@
 /*
  * Copyright (C) 2014 The Android Open Source Project
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
+ * Copyright (C) 2014 MediaTek Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +21,10 @@
 
 package com.android.internal.telephony.dataconnection;
 
-import static android.telephony.SubscriptionManager.DEFAULT_PHONE_INDEX;
-import static android.telephony.SubscriptionManager.INVALID_PHONE_INDEX;
-
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.database.ContentObserver;
 import android.net.ConnectivityManager;
 import android.net.NetworkCapabilities;
@@ -30,10 +35,16 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
+import android.os.Registrant;
+import android.os.RegistrantList;
+import android.os.SystemProperties;
 import android.provider.Settings;
 import android.telephony.Rlog;
+import android.telephony.ServiceState;
 import android.telephony.SubscriptionManager;
 import android.telephony.SubscriptionManager.OnSubscriptionsChangedListener;
+import android.telephony.TelephonyManager;
+import android.telephony.TelephonyManager.MultiSimVariants;
 import android.text.TextUtils;
 import android.util.LocalLog;
 import android.util.SparseArray;
@@ -43,23 +54,34 @@ import com.android.internal.telephony.PhoneBase;
 import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.PhoneProxy;
 import com.android.internal.telephony.SubscriptionController;
+import com.android.internal.telephony.TelephonyIntents;
 import com.android.internal.telephony.dataconnection.DcSwitchAsyncChannel.RequestInfo;
-import com.android.internal.telephony.uicc.IccCardStatus;
-import com.android.internal.telephony.uicc.UiccCard;
-import com.android.internal.telephony.uicc.UiccController;
 import com.android.internal.util.AsyncChannel;
 import com.android.internal.util.IndentingPrintWriter;
 
+import com.mediatek.internal.telephony.cdma.CdmaFeatureOptionUtils;
+import com.mediatek.internal.telephony.dataconnection.DataSubSelector;
+import com.mediatek.internal.telephony.ltedc.svlte.IratController;
+import com.mediatek.internal.telephony.ltedc.svlte.IratDataSwitchHelper;
+import com.mediatek.internal.telephony.ltedc.svlte.MdIratDataSwitchHelper;
+import com.mediatek.internal.telephony.ltedc.svlte.SvlteModeController;
+import com.mediatek.internal.telephony.ltedc.svlte.SvltePhoneProxy;
+import com.mediatek.internal.telephony.ltedc.svlte.SvlteUtils;
+
+import java.util.ArrayList;
+import java.util.concurrent.ConcurrentHashMap;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.ArrayDeque;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map.Entry;
+/** M: start */
+/** M: end */
 
 public class DctController extends Handler {
-    protected static String LOG_TAG = "DctController";
+    private static final String LOG_TAG = "DctController";
     private static final boolean DBG = true;
 
     private static final int EVENT_PROCESS_REQUESTS = 100;
@@ -71,32 +93,67 @@ public class DctController extends Handler {
     private static final int EVENT_SETTINGS_CHANGED = 106;
     private static final int EVENT_SUBSCRIPTIONS_CHANGED = 107;
 
+    //MTK START
+    private static final int EVENT_TRANSIT_TO_ATTACHING = 200;
+    private static final int EVENT_CONFIRM_PREDETACH = 201;
+    private static final int EVENT_RADIO_AVAILABLE = 202;
+
     private static final int EVENT_DATA_ATTACHED = 500;
     private static final int EVENT_DATA_DETACHED = 600;
     private static final int EVENT_EMERGENCY_CALL_TOGGLED = 700;
 
-    protected static DctController sDctController;
+    //M
+    private static final int EVENT_SET_DATA_ALLOWED = 5000;
+    private static final int EVENT_RESTORE_PENDING = 5100;
 
-    protected int mPhoneNum;
-    protected PhoneProxy[] mPhones;
+
+    /** M: start */
+    static final String PROPERTY_RIL_DATA_ICCID = "persist.radio.data.iccid";
+    private String[] PROPERTY_ICCID_SIM = {
+        "ril.iccid.sim1",
+        "ril.iccid.sim2",
+        "ril.iccid.sim3",
+        "ril.iccid.sim4",
+    };
+    static final String PROPERTY_DATA_ALLOW_SIM = "ril.data.allow";
+    static final String PROPERTY_IA_APN_SET_ICCID = "ril.ia.iccid";
+    static final String PROPERTY_TEMP_IA = "ril.radio.ia";
+    static final String PROPERTY_TEMP_IA_APN = "ril.radio.ia-apn";
+    static final String ACTION_SHUTDOWN_IPO = "android.intent.action.ACTION_SHUTDOWN_IPO";
+    private static final String INVALID_ICCID = "N/A";
+    /** M: end */
+
+    private static DctController sDctController;
+
+    // / M: [C2K][IRAT]start {@
+    private boolean mSuspendNetworkRequest;
+    private boolean mHasPendingDataSwitch;
+
+    private IratDataSwitchHelper[] mIratDataSwitchHelper;
+    // / M: [C2K][IRAT] end @}
+
+    private int mPhoneNum;
+    private PhoneProxy[] mPhones;
     private DcSwitchStateMachine[] mDcSwitchStateMachine;
-    protected DcSwitchAsyncChannel[] mDcSwitchAsyncChannel;
+    private DcSwitchAsyncChannel[] mDcSwitchAsyncChannel;
     private Handler[] mDcSwitchStateHandler;
-    protected HashMap<Integer, RequestInfo> mRequestInfos = new HashMap<Integer, RequestInfo>();
-    protected Context mContext;
+    private HashMap<Integer, RequestInfo> mRequestInfos = new HashMap<Integer, RequestInfo>();
+    private Context mContext;
 
-    /** Used to send us NetworkRequests from ConnectivityService.  Remember it so we can
+    //M: Pre-Detach Check State
+    protected int mUserCnt;
+    protected int mTransactionId;
+
+    /** Used to send us NetworkRequests from ConnectivityService.  Remeber it so we can
      * unregister on dispose. */
     private Messenger[] mNetworkFactoryMessenger;
     private NetworkFactory[] mNetworkFactory;
     private NetworkCapabilities[] mNetworkFilter;
 
-    protected SubscriptionController mSubController = SubscriptionController.getInstance();
+    private RegistrantList mNotifyDataSwitchInfo = new RegistrantList();
+    private SubscriptionController mSubController = SubscriptionController.getInstance();
 
-    private SubscriptionManager mSubMgr;
-
-    protected AtomicBoolean[] mIsDataAllowed;
-    protected AtomicBoolean mNeedsDdsSwitch = new AtomicBoolean(false);
+    /*private SubscriptionManager mSubMgr;
 
     private OnSubscriptionsChangedListener mOnSubscriptionsChangedListener =
             new OnSubscriptionsChangedListener() {
@@ -104,13 +161,33 @@ public class DctController extends Handler {
         public void onSubscriptionsChanged() {
             DctController.this.obtainMessage(EVENT_SUBSCRIPTIONS_CHANGED).sendToTarget();
         }
+    };*/
+
+    /** M: setup default data sub */
+    private DataSubSelector mDataSubSelector;
+
+    /** M: allow data service or not, check setDataAllowed */
+    private static boolean mDataAllowed = true;
+    protected ConcurrentHashMap<Handler, DcStateParam> mDcSwitchStateChange
+            = new ConcurrentHashMap<Handler, DcStateParam>();
+    private Runnable mDataNotAllowedTimeoutRunnable = new Runnable() {
+        @Override
+        public void run() {
+            logd("disable data service timeout and enable data service again");
+            setDataAllowed(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, true, null, 0);
+        }
     };
 
     private ContentObserver mObserver = new ContentObserver(new Handler()) {
         @Override
         public void onChange(boolean selfChange) {
-            logd("Settings change");
-            DctController.this.obtainMessage(EVENT_SETTINGS_CHANGED).sendToTarget();
+            logd("Settings change, selfChange=" + selfChange);
+            // M:[C2K][IRAT] Pending release request during IRAT.
+            if (isNetworkRequestSuspend()) {
+                mHasPendingDataSwitch = true;
+            } else {
+                DctController.this.obtainMessage(EVENT_SETTINGS_CHANGED).sendToTarget();
+            }
         }
     };
 
@@ -120,12 +197,13 @@ public class DctController extends Handler {
             return;
         }
 
-        PhoneBase phoneBase = (PhoneBase)phone.getActivePhone();
+        PhoneBase phoneBase = getActivePhone(phone.getPhoneId());
         if (phoneBase == null) {
             loge("updatePhoneObject phoneBase = null");
             return;
         }
 
+        logd("updatePhoneObject:" + phone);
         for (int i = 0; i < mPhoneNum; i++) {
             if (mPhones[i] == phone) {
                 updatePhoneBaseForIndex(i, phoneBase);
@@ -137,12 +215,15 @@ public class DctController extends Handler {
     private void updatePhoneBaseForIndex(int index, PhoneBase phoneBase) {
         logd("updatePhoneBaseForIndex for phone index=" + index);
 
-        phoneBase.getServiceStateTracker().registerForDataConnectionAttached(mRspHandler,
-                   EVENT_DATA_ATTACHED + index, null);
-        phoneBase.getServiceStateTracker().registerForDataConnectionDetached(mRspHandler,
-                   EVENT_DATA_DETACHED + index, null);
-        phoneBase.registerForEmergencyCallToggle(mRspHandler,
-                EVENT_EMERGENCY_CALL_TOGGLED + index, null);
+        // M: [C2K] [IRAT] If not IRat Support Phone, register data connection state
+        if (!CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            phoneBase.getServiceStateTracker().registerForDataConnectionAttached(mRspHandler,
+                    EVENT_DATA_ATTACHED + index, null);
+            phoneBase.getServiceStateTracker().registerForDataConnectionDetached(mRspHandler,
+                    EVENT_DATA_DETACHED + index, null);
+            phoneBase.registerForEmergencyCallToggle(mRspHandler,
+                    EVENT_EMERGENCY_CALL_TOGGLED + index, null);
+        }
 
         ConnectivityManager cm = (ConnectivityManager)mPhones[index].getContext()
             .getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -155,7 +236,6 @@ public class DctController extends Handler {
             mNetworkFilter[index] = null;
         }
 
-        // TODO - just make this a singleton.  It'll be simpler
         mNetworkFilter[index] = new NetworkCapabilities();
         mNetworkFilter[index].addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR);
         mNetworkFilter[index].addCapability(NetworkCapabilities.NET_CAPABILITY_MMS);
@@ -171,21 +251,65 @@ public class DctController extends Handler {
         mNetworkFilter[index].addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED);
         mNetworkFilter[index].addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
 
+        /** M: start */
+        mNetworkFilter[index].addCapability(NetworkCapabilities.NET_CAPABILITY_DM);
+        mNetworkFilter[index].addCapability(NetworkCapabilities.NET_CAPABILITY_WAP);
+        mNetworkFilter[index].addCapability(NetworkCapabilities.NET_CAPABILITY_NET);
+        mNetworkFilter[index].addCapability(NetworkCapabilities.NET_CAPABILITY_CMMAIL);
+        mNetworkFilter[index].addCapability(NetworkCapabilities.NET_CAPABILITY_TETHERING);
+        mNetworkFilter[index].addCapability(NetworkCapabilities.NET_CAPABILITY_RCSE);
+        mNetworkFilter[index].addCapability(NetworkCapabilities.NET_CAPABILITY_VSIM);
+        /** M: end */
+
         mNetworkFactory[index] = new TelephonyNetworkFactory(this.getLooper(),
                 mPhones[index].getContext(), "TelephonyNetworkFactory", phoneBase,
                 mNetworkFilter[index]);
         mNetworkFactory[index].setScoreFilter(50);
         mNetworkFactoryMessenger[index] = new Messenger(mNetworkFactory[index]);
         cm.registerNetworkFactory(mNetworkFactoryMessenger[index], "Telephony");
+
+        // M: [C2K] [IRAT] register events using IRAT data switch helper
+        // class and listen for IRAT flow. @{
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            logd("[IRAT_DctController] Register for RAT events.");
+            mIratDataSwitchHelper[index] =
+                    ((SvltePhoneProxy) mPhones[index]).getIratDataSwitchHelper();
+
+            mIratDataSwitchHelper[index].registerForDataConnectionAttached(
+                    mRspHandler, EVENT_DATA_ATTACHED + index, null);
+            mIratDataSwitchHelper[index].registerForDataConnectionDetached(
+                    mRspHandler, EVENT_DATA_DETACHED + index, null);
+            //TODO: Wait for mIratDataSwitchHelper support
+            //mIratDataSwitchHelper[index].registerForEmergencyCallToggle(mRspHandler,
+            //        EVENT_EMERGENCY_CALL_TOGGLED + index, null);
+            mIratDataSwitchHelper[index].registerSetDataAllowed(mRspHandler,
+                    EVENT_SET_DATA_ALLOWED + index, null);
+            // M: sim plug in/out event always report by md1, should always use ltephone.
+            ((SvltePhoneProxy) mPhones[index]).getLtePhone().mCi
+                .registerForSimPlugOut(mRspHandler, EVENT_RESTORE_PENDING + index, null);
+        } else {
+            //M: Register for Combine attach
+            phoneBase.mCi.registerSetDataAllowed(mRspHandler, EVENT_SET_DATA_ALLOWED + index, null);
+            phoneBase.mCi.registerForSimPlugOut(mRspHandler, EVENT_RESTORE_PENDING + index, null);
+        }
+        // }@
+        phoneBase.mCi.registerForNotAvailable(mRspHandler, EVENT_RESTORE_PENDING + index, null);
     }
 
     private Handler mRspHandler = new Handler() {
         @Override
-        public void handleMessage(Message msg){
-            if (msg.what >= EVENT_EMERGENCY_CALL_TOGGLED) {
+        public void handleMessage(Message msg) {
+            AsyncResult ar;
+            if (msg.what >= EVENT_RESTORE_PENDING) {
+                logd("EVENT_SIM" + (msg.what - EVENT_RESTORE_PENDING + 1) + "_RESTORE.");
+                restorePendingRequest(msg.what - EVENT_RESTORE_PENDING);
+            } else if (msg.what >= EVENT_SET_DATA_ALLOWED) {
+                logd("EVENT_PHONE" + (msg.what - EVENT_SET_DATA_ALLOWED + 1) + "_SET_DATA_ALLOWED");
+                transitToAttachingState(msg.what - EVENT_SET_DATA_ALLOWED);
+            } else if (msg.what >= EVENT_EMERGENCY_CALL_TOGGLED) {
                 logd("EVENT_PHONE" + (msg.what - EVENT_EMERGENCY_CALL_TOGGLED + 1)
                         + "_EMERGENCY_CALL_END.");
-                AsyncResult ar = (AsyncResult) msg.obj;
+                ar = (AsyncResult) msg.obj;
                 Integer toggle = (Integer) ar.result;
                 mDcSwitchAsyncChannel[msg.what - EVENT_EMERGENCY_CALL_TOGGLED].
                         notifyEmergencyCallToggled(toggle.intValue());
@@ -195,8 +319,7 @@ public class DctController extends Handler {
                 mDcSwitchAsyncChannel[msg.what - EVENT_DATA_DETACHED].notifyDataDetached();
 
             } else if (msg.what >= EVENT_DATA_ATTACHED) {
-                logd("EVENT_PHONE" + (msg.what - EVENT_DATA_ATTACHED + 1)
-                        + "_DATA_ATTACH.");
+                logd("EVENT_PHONE" + (msg.what - EVENT_DATA_ATTACHED + 1) + "_DATA_ATTACH.");
                 mDcSwitchAsyncChannel[msg.what - EVENT_DATA_ATTACHED].notifyDataAttached();
             }
         }
@@ -219,7 +342,7 @@ public class DctController extends Handler {
         return sDctController;
     }
 
-    protected DctController(PhoneProxy[] phones) {
+    private DctController(PhoneProxy[] phones) {
         logd("DctController(): phones.length=" + phones.length);
         if (phones == null || phones.length == 0) {
             if (phones == null) {
@@ -238,16 +361,12 @@ public class DctController extends Handler {
         mNetworkFactoryMessenger = new Messenger[mPhoneNum];
         mNetworkFactory = new NetworkFactory[mPhoneNum];
         mNetworkFilter = new NetworkCapabilities[mPhoneNum];
-        mIsDataAllowed = new AtomicBoolean[mPhoneNum];
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            mIratDataSwitchHelper = new MdIratDataSwitchHelper[mPhoneNum];
+        }
 
         for (int i = 0; i < mPhoneNum; ++i) {
             int phoneId = i;
-            if (mPhoneNum == 1) {
-                // For single SIM mode allow data by default
-                mIsDataAllowed[i] = new AtomicBoolean(true);
-            } else {
-                mIsDataAllowed[i] = new AtomicBoolean(false);
-            }
             mDcSwitchStateMachine[i] = new DcSwitchStateMachine(mPhones[i],
                     "DcSwitchStateMachine-" + phoneId, phoneId);
             mDcSwitchStateMachine[i].start();
@@ -264,44 +383,95 @@ public class DctController extends Handler {
             }
 
             // Register for radio state change
-            PhoneBase phoneBase = (PhoneBase)mPhones[i].getActivePhone();
+            // M: [C2K][IRAT] Change for phone ID.
+            PhoneBase phoneBase = getActivePhone(phoneId);
             updatePhoneBaseForIndex(i, phoneBase);
         }
 
         mContext = mPhones[0].getContext();
-        mSubMgr = SubscriptionManager.from(mContext);
-        mSubMgr.addOnSubscriptionsChangedListener(mOnSubscriptionsChangedListener);
+
+        //MTK: Fix google issue, if we use this listener, we will get notify even if carrier change.
+        //mSubMgr = SubscriptionManager.from(mContext);
+        //mSubMgr.addOnSubscriptionsChangedListener(mOnSubscriptionsChangedListener);
+
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(ACTION_SHUTDOWN_IPO);
+        // M: mode switch group id maybe change, should update for insurance.
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            filter.addAction(TelephonyIntents.ACTION_SET_RADIO_TECHNOLOGY_DONE);
+        }
+        mContext.registerReceiver(mShutDownIpoIntentReceiver, filter);
+
+        filter = new IntentFilter();
+        filter.addAction(TelephonyIntents.ACTION_SUBINFO_RECORD_UPDATED);
+        mContext.registerReceiver(mSubInfoUpdateIntentReceiver, filter);
+
+        getActivePhone(0).mCi.registerForAvailable(this, EVENT_RADIO_AVAILABLE, null);
 
         //Register for settings change.
         mContext.getContentResolver().registerContentObserver(
                 Settings.Global.getUriFor(
                 Settings.Global.MULTI_SIM_DATA_CALL_SUBSCRIPTION),
                 false, mObserver);
+
+        /** M: start */
+        mDataSubSelector = new DataSubSelector(mContext, mPhoneNum);
+
+        //Since the enter of attaching state may get instance of DctController,
+        //we need make sure dctController has already been created.
+        if (!CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            setAlwaysAttachSim();
+        }
+        /** M: end */
     }
 
     public void dispose() {
         logd("DctController.dispose");
         for (int i = 0; i < mPhoneNum; ++i) {
-            ConnectivityManager cm = (ConnectivityManager)mPhones[i].getContext()
+            ConnectivityManager cm = (ConnectivityManager) mPhones[i].getContext()
                 .getSystemService(Context.CONNECTIVITY_SERVICE);
             cm.unregisterNetworkFactory(mNetworkFactoryMessenger[i]);
             mNetworkFactoryMessenger[i] = null;
+
+            // M: Register for Combine attach
+            PhoneBase phoneBase = getActivePhone(i);
+            phoneBase.mCi.unregisterForNotAvailable(mRspHandler);
+
+            /// M: [C2K][IRAT] Unregister for IRAT flow.
+            if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                mIratDataSwitchHelper[i].unregisterForDataConnectionAttached(mRspHandler);
+                mIratDataSwitchHelper[i].unregisterForDataConnectionDetached(mRspHandler);
+                mIratDataSwitchHelper[i].unregisterSetDataAllowed(mRspHandler);
+                // M: sim plug in/out event always report by md1, should always use ltephone.
+                ((SvltePhoneProxy) mPhones[i]).getLtePhone().mCi
+                    .unregisterForSimPlugOut(mRspHandler);
+            } else {
+                phoneBase.getServiceStateTracker().unregisterForDataConnectionAttached(mRspHandler);
+                phoneBase.getServiceStateTracker().unregisterForDataConnectionDetached(mRspHandler);
+                phoneBase.mCi.unregisterSetDataAllowed(mRspHandler);
+                phoneBase.mCi.unregisterForSimPlugOut(mRspHandler);
+            }
         }
 
-        mSubMgr.removeOnSubscriptionsChangedListener(mOnSubscriptionsChangedListener);
+        getActivePhone(0).mCi.unregisterForAvailable(this);
+
+        //MTK: Fix google issue, if we use this listener, we will get notify even if carrier change
+        //mSubMgr.removeOnSubscriptionsChangedListener(mOnSubscriptionsChangedListener);
+
         mContext.getContentResolver().unregisterContentObserver(mObserver);
+        mContext.unregisterReceiver(mShutDownIpoIntentReceiver);
+        mContext.unregisterReceiver(mSubInfoUpdateIntentReceiver);
     }
 
-
     @Override
-    public void handleMessage (Message msg) {
+    public void handleMessage(Message msg) {
         logd("handleMessage msg=" + msg);
         switch (msg.what) {
             case EVENT_PROCESS_REQUESTS:
                 onProcessRequest();
                 break;
             case EVENT_EXECUTE_REQUEST:
-                onExecuteRequest((RequestInfo)msg.obj);
+                onExecuteRequest((RequestInfo) msg.obj);
                 break;
             case EVENT_EXECUTE_ALL_REQUESTS:
                 onExecuteAllRequests(msg.arg1);
@@ -321,21 +491,36 @@ public class DctController extends Handler {
             case EVENT_SUBSCRIPTIONS_CHANGED:
                 onSubInfoReady();
                 break;
+
+            //MTK-Start
+            case EVENT_TRANSIT_TO_ATTACHING:
+                int phoneId = (int) msg.arg1;
+                logd("EVENT_TRANSIT_TO_ATTACHING: phone" + phoneId);
+                transitToAttachingState(phoneId);
+                break;
+            case EVENT_CONFIRM_PREDETACH:
+                logd("EVENT_CONFIRM_PREDETACH");
+                handleConfirmPreDetach(msg);
+                break;
+            case EVENT_RADIO_AVAILABLE:
+                if (mSubController.isReady()) {
+                    onSubInfoReady();
+                }
+                break;
+            //MTK-End
+
             default:
                 loge("Un-handled message [" + msg.what + "]");
         }
     }
 
-    private int requestNetwork(NetworkRequest request, int priority, LocalLog l) {
-        logd("requestNetwork request=" + request + ", priority=" + priority);
+    private int requestNetwork(NetworkRequest request, int priority, LocalLog l, int phoneId
+        , int gid) {
+        logd("requestNetwork request=" + request
+                + ", priority=" + priority + ", gid = " + gid);
         l.log("Dctc.requestNetwork, priority=" + priority);
 
-        if (mRequestInfos.containsKey(request.requestId)) {
-            logd("requestNetwork replacing " + mRequestInfos.get(request.requestId));
-            // NOTE: executedPhoneId might be reset
-        }
-
-        RequestInfo requestInfo = new RequestInfo(request, priority, l);
+        RequestInfo requestInfo = new RequestInfo(request, priority, l, phoneId, gid);
         mRequestInfos.put(request.requestId, requestInfo);
         processRequests();
 
@@ -348,13 +533,36 @@ public class DctController extends Handler {
         if (requestInfo != null) requestInfo.log("DctController.releaseNetwork");
 
         mRequestInfos.remove(request.requestId);
+        //VoLTE: ECC without SIM
+        String specifier = request.networkCapabilities.getNetworkSpecifier();
+        boolean bToAttachingState = false;
+        int phoneId = -1;
+        if (specifier != null && !specifier.equals("")) {
+            int subId =  Integer.parseInt(specifier);
+            if (subId < SubscriptionManager.INVALID_SUBSCRIPTION_ID &&
+                request.networkCapabilities.
+                hasCapability(NetworkCapabilities.NET_CAPABILITY_EIMS)) {
+                bToAttachingState = true;
+                phoneId = mSubController.getPhoneId(subId);
+            }
+        }
+
         releaseRequest(requestInfo);
         processRequests();
+
+        if (bToAttachingState) {
+            logd("ECC w/o SIM, disconnectAll to transit to attaching state: "
+                + bToAttachingState + ", Set phoneId: " + phoneId + " to attaching state");
+            mDcSwitchAsyncChannel[phoneId].disconnectAll();
+        }
+
         return PhoneConstants.APN_REQUEST_STARTED;
     }
 
-    protected void processRequests() {
+    void processRequests() {
         logd("processRequests");
+        // remove redundant messages firstly, this situation happens offen.
+        removeMessages(EVENT_PROCESS_REQUESTS);
         sendMessage(obtainMessage(EVENT_PROCESS_REQUESTS));
     }
 
@@ -365,7 +573,7 @@ public class DctController extends Handler {
 
     void executeAllRequests(int phoneId) {
         logd("executeAllRequests, phone:" + phoneId);
-        sendMessage(obtainMessage(EVENT_EXECUTE_ALL_REQUESTS, phoneId,0));
+        sendMessage(obtainMessage(EVENT_EXECUTE_ALL_REQUESTS, phoneId, 0));
     }
 
     void releaseRequest(RequestInfo request) {
@@ -383,7 +591,13 @@ public class DctController extends Handler {
         sendMessage(obtainMessage(EVENT_RETRY_ATTACH, phoneId, 0));
     }
 
-    protected void onProcessRequest() {
+    private void onProcessRequest() {
+        for (int i = 0; i < getGroupNumbers(); i++) {
+            onProcessGroup(i);
+        }
+    }
+
+    private void onProcessGroup(int group) {
         //process all requests
         //1. Check all requests and find subscription of the top priority
         //   request
@@ -392,59 +606,82 @@ public class DctController extends Handler {
         //2-2. If no, set data not allow on the current PS subscription
         //2-2-1. Set data allow on the selected subscription
 
-        final int requestedPhoneId = getTopPriorityRequestPhoneId();
-        int activePhoneId = INVALID_PHONE_INDEX;
+        int phoneId = getTopPriorityRequestPhoneId(group);
+        int activePhoneId = -1;
 
-        for (int i=0; i<mDcSwitchStateMachine.length; i++) {
-            if (!mDcSwitchAsyncChannel[i].isIdleSync()) {
+        for (int i = 0; i < mDcSwitchStateMachine.length; i++) {
+            if (getGroupId(i) == group && !mDcSwitchAsyncChannel[i].isIdleSync()) {
                 activePhoneId = i;
                 break;
             }
         }
 
-        logd("onProcessRequest requestedPhoneId=" + requestedPhoneId
+        logd("onProcessGroup phoneId=" + phoneId + ", groupId=" + group
                 + ", activePhoneId=" + activePhoneId);
 
-        if (requestedPhoneId == INVALID_PHONE_INDEX) {
-            // we have no network request - don't bother with this
-            return;
-        }
+        /** M: handle data not allowed that all state should be set to IDLD */
+        if (mDataAllowed) {
+            if (activePhoneId == -1 || activePhoneId == phoneId) {
+                Iterator<Integer> iterator = mRequestInfos.keySet().iterator();
 
-        // if we have no active phones or the active phone is the desired, make requests
-        if (activePhoneId == INVALID_PHONE_INDEX || activePhoneId == requestedPhoneId) {
-            Iterator<Integer> iterator = mRequestInfos.keySet().iterator();
-            while (iterator.hasNext()) {
-                RequestInfo requestInfo = mRequestInfos.get(iterator.next());
-                if (requestInfo.executedPhoneId != INVALID_PHONE_INDEX) continue;
-                if (getRequestPhoneId(requestInfo.request) == requestedPhoneId) {
-                    mDcSwitchAsyncChannel[requestedPhoneId].connect(requestInfo);
+                if (activePhoneId == -1 && !iterator.hasNext()) {
+                    logd("No active phone, set phone" + phoneId + " to attaching state");
+                    transitToAttachingState(phoneId);
                 }
+
+                while (iterator.hasNext()) {
+                    RequestInfo requestInfo = mRequestInfos.get(iterator.next());
+                    if (requestInfo != null && requestInfo.phoneId == phoneId
+                            && requestInfo.mGId == group
+                            && !requestInfo.executed) {
+                        mDcSwitchAsyncChannel[phoneId].connect(requestInfo);
+                    }
+                }
+            } else {
+                mDcSwitchAsyncChannel[activePhoneId].disconnectAll();
             }
         } else {
-            mDcSwitchAsyncChannel[activePhoneId].disconnectAll();
+            if (activePhoneId != -1) {
+                logd("onProcessRequest data is not allowed, release all requests");
+                onReleaseAllRequests(activePhoneId);
+            } else {
+                logd("onProcessRequest data is not allowed and already in IDLE state");
+            }
         }
     }
 
     private void onExecuteRequest(RequestInfo requestInfo) {
-        if (requestInfo.executedPhoneId == INVALID_PHONE_INDEX &&
-                mRequestInfos.containsKey(requestInfo.request.requestId)) {
+
+        //MTK: Fix a timing issue if we already restore the request to pending queue.
+        // Check the request which we want to execute is still in the requestInfo or not.
+        //if (!requestInfo.executed && mRequestInfos.containsKey(requestInfo.request.requestId)) {
+        if (needExecuteRequest(requestInfo)) {
+            //MTK Fix google issue
+            //requestInfo.executed = true;
             logd("onExecuteRequest request=" + requestInfo);
-            requestInfo.log("DctController.onExecuteRequest");
+            requestInfo.log("DctController.onExecuteRequest - executed=" + requestInfo.executed);
             String apn = apnForNetworkRequest(requestInfo.request);
-            final int phoneId = getRequestPhoneId(requestInfo.request);
-            requestInfo.executedPhoneId = phoneId;
-            PhoneBase phoneBase = (PhoneBase)mPhones[phoneId].getActivePhone();
+            int phoneId = requestInfo.phoneId;
+            //TODO: Remove?
+            if (!SubscriptionManager.isValidPhoneId(phoneId)) {
+                logd("onExecuteRequest invalid phoneId:" + phoneId);
+                return;
+            }
+            logd("onExecuteRequest apn = " + apn + " phoneId=" + phoneId);
+
+            PhoneBase phoneBase = getActivePhone(phoneId);
             DcTrackerBase dcTracker = phoneBase.mDcTracker;
             dcTracker.incApnRefCount(apn, requestInfo.getLog());
+            requestInfo.executed = true;
         }
     }
 
     private void onExecuteAllRequests(int phoneId) {
-        logd("onExecuteAllRequests phoneId=" + phoneId);
+        logd("onExecuteAllRequests phoneId=" + phoneId + ",request size = " + mRequestInfos.size());
         Iterator<Integer> iterator = mRequestInfos.keySet().iterator();
         while (iterator.hasNext()) {
             RequestInfo requestInfo = mRequestInfos.get(iterator.next());
-            if (getRequestPhoneId(requestInfo.request) == phoneId) {
+            if (requestInfo.phoneId == phoneId) {
                 onExecuteRequest(requestInfo);
             }
         }
@@ -454,41 +691,32 @@ public class DctController extends Handler {
         logd("onReleaseRequest request=" + requestInfo);
         if (requestInfo != null) {
             requestInfo.log("DctController.onReleaseRequest");
-            if (requestInfo.executedPhoneId != INVALID_PHONE_INDEX) {
+            if (requestInfo.executed) {
                 String apn = apnForNetworkRequest(requestInfo.request);
-                int phoneId = requestInfo.executedPhoneId;
-                requestInfo.executedPhoneId = INVALID_PHONE_INDEX;
-                PhoneBase phoneBase = (PhoneBase)mPhones[phoneId].getActivePhone();
+                int phoneId = requestInfo.phoneId;
+                PhoneBase phoneBase = getActivePhone(phoneId);
                 DcTrackerBase dcTracker = phoneBase.mDcTracker;
                 dcTracker.decApnRefCount(apn, requestInfo.getLog());
+                requestInfo.executed = false;
             }
         }
     }
 
-    private boolean isWithOutSpecifier(RequestInfo requestInfo) {
-        String specifier = requestInfo.request.networkCapabilities
-            .getNetworkSpecifier();
-        if (specifier == null || specifier.equals("")) {
-            logd("isWithOutSpecifier = true, requestInfo = " + requestInfo);
-            return true;
-        } else {
-            return false;
-        }
-    }
-
-    protected void onReleaseAllRequests(int phoneId) {
-        logd("onReleaseAllRequests phoneId=" + phoneId);
+    private void onReleaseAllRequests(int phoneId) {
+        logd("onReleaseAllRequests phoneId=" + phoneId + ",request size = " + mRequestInfos.size());
         Iterator<Integer> iterator = mRequestInfos.keySet().iterator();
         while (iterator.hasNext()) {
             RequestInfo requestInfo = mRequestInfos.get(iterator.next());
-            if (requestInfo.executedPhoneId == phoneId) {
+            if (requestInfo.phoneId == phoneId) {
                 onReleaseRequest(requestInfo);
             }
         }
     }
 
     private void onRetryAttach(int phoneId) {
-        final int topPriPhone = getTopPriorityRequestPhoneId();
+        //M: For nSmA
+        int groupId = getGroupId(phoneId);
+        final int topPriPhone = getTopPriorityRequestPhoneId(groupId);
         logd("onRetryAttach phoneId=" + phoneId + " topPri phone = " + topPriPhone);
 
         if (phoneId != -1 && phoneId == topPriPhone) {
@@ -496,126 +724,109 @@ public class DctController extends Handler {
         }
     }
 
-    private void deactivateDdsRequests() {
+
+    private void onSettingsChanged() {
+        //Sub Selection
         int dataSubId = mSubController.getDefaultDataSubId();
 
+        /** M: Set data ICCID for combination attach */
+        int dataPhoneId = SubscriptionManager.getPhoneId(dataSubId);
+        String defaultIccid = "";
+        if (dataPhoneId >= 0) {
+            if (dataPhoneId >= PROPERTY_ICCID_SIM.length) {
+                loge("onSettingsChange, phoneId out of boundary:" + dataPhoneId);
+            } else {
+                defaultIccid = SystemProperties.get(PROPERTY_ICCID_SIM[dataPhoneId]);
+                logd("onSettingsChange, Iccid = " + defaultIccid + ", dataPhoneId:" + dataPhoneId);
+                if (defaultIccid.equals("")) {
+                    logd("onSettingsChange, get iccid fail");
+                    SystemProperties.set(PROPERTY_RIL_DATA_ICCID, defaultIccid);
+                    return;
+                }
+            }
+        } else {
+            logd("onSettingsChange, default data unset");
+        }
+        SystemProperties.set(PROPERTY_RIL_DATA_ICCID, defaultIccid);
+
+        logd("onSettingsChange, data sub: " + dataSubId
+                + ", defaultIccid: " + defaultIccid);
+
+        int i = 0;
         Iterator<Integer> iterator = mRequestInfos.keySet().iterator();
         while (iterator.hasNext()) {
             RequestInfo requestInfo = mRequestInfos.get(iterator.next());
-            if (requestInfo != null) {
-                String specifier = requestInfo.request.networkCapabilities
-                    .getNetworkSpecifier();
-                if (specifier == null || specifier.equals("")) {
-                    if (requestInfo.executedPhoneId != INVALID_PHONE_INDEX) {
-                        String apn = apnForNetworkRequest(requestInfo.request);
-                        int phoneId = requestInfo.executedPhoneId;
-                        requestInfo.executedPhoneId = INVALID_PHONE_INDEX;
-                        logd("[setDataSubId] subId =" + dataSubId);
-                        requestInfo.log(
-                                "DctController.onSettingsChange releasing request");
-                        for (int i = 0; i < mPhoneNum; i++) {
-                            PhoneBase phoneBase =
-                                (PhoneBase)mPhones[i].getActivePhone();
-                            DcTrackerBase dcTracker = phoneBase.mDcTracker;
-                            dcTracker.decApnRefCount(apn, requestInfo.getLog());
-                        }
-                    }
+            String specifier = requestInfo.request.networkCapabilities.getNetworkSpecifier();
+            //M: Fix Google's Issue
+            //String apn = apnForNetworkRequest(requestInfo.request);
+            if (specifier == null || specifier.equals("")) {
+                onReleaseRequest(requestInfo);
+
+                for (i = 0; i < mPhoneNum; ++i) {
+                    ((DctController.TelephonyNetworkFactory) mNetworkFactory[i])
+                           .addPendingRequest(requestInfo.request);
                 }
-            }
-        }
-    }
-
-    protected void onSettingsChanged() {
-        //Sub Selection
-        int dataSubId = mSubController.getDefaultDataSubId();
-        mNeedsDdsSwitch.set(true);
-        int activePhoneId = -1;
-        for (int i=0; i<mDcSwitchStateMachine.length; i++) {
-            if (!mDcSwitchAsyncChannel[i].isIdleSync()) {
-                activePhoneId = i;
-                break;
+                iterator.remove();
             }
         }
 
-        logd("onSettingsChange, activePhoneId = " + activePhoneId);
-        deactivateDdsRequests();
-
-        // Some request maybe pending due to invalid settings
-        // Try to handle pending request when settings changed
-        for (int i = 0; i < mPhoneNum; ++i) {
-            ((DctController.TelephonyNetworkFactory)mNetworkFactory[i]).evalPendingRequest();
+        for (i = 0; i < mPhoneNum; ++i) {
+            ((DctController.TelephonyNetworkFactory) mNetworkFactory[i])
+                .evalPendingRequest();
         }
 
         processRequests();
     }
 
-    protected int getTopPriorityRequestPhoneId() {
+    private int getTopPriorityRequestPhoneId(int group) {
         RequestInfo retRequestInfo = null;
-        String topSubId = null;
+        int phoneId = 0;
         int priority = -1;
-        int subId;
 
-        int activePhoneId = -1;
-        for (int i=0; i<mDcSwitchStateMachine.length; i++) {
-            if (!mDcSwitchAsyncChannel[i].isIdleSync()) {
-                activePhoneId = i;
-                break;
+        //TODO: Handle SIM Switch
+        for (int i = 0; i < mPhoneNum; i++) {
+            Iterator<Integer> iterator = mRequestInfos.keySet().iterator();
+            while (iterator.hasNext()) {
+                RequestInfo requestInfo = mRequestInfos.get(iterator.next());
+                logd("selectExecPhone requestInfo = " + requestInfo);
+                if (requestInfo.phoneId == i &&
+                        priority < requestInfo.priority &&
+                        requestInfo.mGId == group) {
+                    priority = requestInfo.priority;
+                    retRequestInfo = requestInfo;
+                }
             }
         }
 
-        for (RequestInfo requestInfo : mRequestInfos.values()) {
-            logd("getTopPriorityRequestPhoneId requestInfo=" + requestInfo);
-            if (requestInfo.priority > priority) {
-                priority = requestInfo.priority;
-                topSubId = requestInfo.request.networkCapabilities.getNetworkSpecifier();
-                retRequestInfo = requestInfo;
-            } else if (priority == requestInfo.priority) {
-                if (requestInfo.executedPhoneId == activePhoneId) {
-                   topSubId = requestInfo.request.networkCapabilities.getNetworkSpecifier();
-               }
-            }
-        }
-        if (TextUtils.isEmpty(topSubId)) {
-            subId = mSubController.getDefaultDataSubId();
+        if (retRequestInfo != null) {
+            phoneId = getRequestPhoneId(retRequestInfo.request);
+        //MTK: Enhancement
+        //} else {
+        //    int defaultDds = mSubController.getDefaultDataSubId();
+        //    phoneId = mSubController.getPhoneId(defaultDds);
+        //    logd("getTopPriorityRequestPhoneId: RequestInfo list is empty, " +
+        //            "use Dds sub phone id");
         } else {
-            subId = Integer.parseInt(topSubId);
-            if (apnForNetworkRequest(retRequestInfo.request).equals(
-                    PhoneConstants.APN_TYPE_IMS) && mNeedsDdsSwitch.get()) {
-                logd("getTopPriorityRequestPhoneId: ims request, use dds phone id");
-                subId = mSubController.getDefaultDataSubId();
-            } else if (subId != mSubController.getDefaultDataSubId()) {
-                logd("getTopPriorityRequestPhoneId: Request needs Dds switch");
-                mNeedsDdsSwitch.set(true);
-            }
+            phoneId = getPreferPhoneId(group);
         }
-        final int phoneId = mSubController.getPhoneId(subId);
-        if (phoneId == DEFAULT_PHONE_INDEX) {
-            // that means there isn't a phone for the default sub
-            return INVALID_PHONE_INDEX;
-        }
+
+        logd("getTopPriorityRequestPhoneId = " + phoneId + ", priority = " + priority
+                + ", gruop = " + group);
 
         return phoneId;
     }
 
-    protected void onSubInfoReady() {
+    private boolean isValidPhoneId(int phoneId) {
+        return phoneId >= 0 && phoneId <= mPhoneNum;
+    }
+
+    private void onSubInfoReady() {
         logd("onSubInfoReady mPhoneNum=" + mPhoneNum);
-        UiccController uiccController = UiccController.getInstance();
         for (int i = 0; i < mPhoneNum; ++i) {
-            UiccCard card = uiccController.getUiccCard(i);
             int subId = mPhones[i].getSubId();
             logd("onSubInfoReady handle pending requests subId=" + subId);
-            if ((card == null) || (card.getCardState() ==
-                    IccCardStatus.CardState.CARDSTATE_ABSENT)) {
-                logd("onSubInfoReady: SIM card absent on phoneId = " + i);
-                PhoneBase phoneBase = (PhoneBase)mPhones[i].getActivePhone();
-                DcTrackerBase dcTracker = phoneBase.mDcTracker;
-                if (dcTracker.isApnTypeActive(PhoneConstants.APN_TYPE_DEFAULT)) {
-                    logd("onSubInfoReady: reset INTERNET request as SIM has been removed");
-                    deactivateDdsRequests();
-                }
-            }
             mNetworkFilter[i].setNetworkSpecifier(String.valueOf(subId));
-            ((DctController.TelephonyNetworkFactory)mNetworkFactory[i]).evalPendingRequest();
+            ((DctController.TelephonyNetworkFactory) mNetworkFactory[i]).evalPendingRequest();
         }
         processRequests();
     }
@@ -676,19 +887,59 @@ public class DctController extends Handler {
         }
         if (nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_RCS)) {
             if (name != null) error = true;
-            name = null;
-            loge("RCS APN type not yet supported");
+            name = PhoneConstants.APN_TYPE_RCS;
+            type = ConnectivityManager.TYPE_MOBILE_RCS;
         }
         if (nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_XCAP)) {
             if (name != null) error = true;
-            name = null;
-            loge("XCAP APN type not yet supported");
+            name = PhoneConstants.APN_TYPE_XCAP;
+            type = ConnectivityManager.TYPE_MOBILE_XCAP;
         }
         if (nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_EIMS)) {
             if (name != null) error = true;
             name = PhoneConstants.APN_TYPE_EMERGENCY;
             type = ConnectivityManager.TYPE_MOBILE_EMERGENCY;
+            logd("### EIMS type support");
         }
+
+        /** M: start */
+        if (nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_DM)) {
+            if (name != null) error = true;
+            name = PhoneConstants.APN_TYPE_DM;
+            type = ConnectivityManager.TYPE_MOBILE_DM;
+        }
+        if (nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_WAP)) {
+            if (name != null) error = true;
+            name = PhoneConstants.APN_TYPE_WAP;
+            type = ConnectivityManager.TYPE_MOBILE_WAP;
+        }
+        if (nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_NET)) {
+            if (name != null) error = true;
+            name = PhoneConstants.APN_TYPE_NET;
+            type = ConnectivityManager.TYPE_MOBILE_NET;
+        }
+        if (nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_CMMAIL)) {
+            if (name != null) error = true;
+            name = PhoneConstants.APN_TYPE_CMMAIL;
+            type = ConnectivityManager.TYPE_MOBILE_CMMAIL;
+        }
+        if (nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_TETHERING)) {
+            if (name != null) error = true;
+            name = PhoneConstants.APN_TYPE_TETHERING;
+            type = ConnectivityManager.TYPE_MOBILE_TETHERING;
+        }
+        if (nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_RCSE)) {
+            if (name != null) error = true;
+            name = PhoneConstants.APN_TYPE_RCSE;
+            type = ConnectivityManager.TYPE_MOBILE_RCSE;
+        }
+        if (nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_VSIM)) {
+            if (name != null) error = true;
+            name = PhoneConstants.APN_TYPE_DEFAULT;
+            type = ConnectivityManager.TYPE_MOBILE;
+        }
+        /** M: end */
+
         if (error) {
             // TODO: If this error condition is removed, the framework's handling of
             // NET_CAPABILITY_NOT_RESTRICTED will need to be updated so requests for
@@ -703,8 +954,14 @@ public class DctController extends Handler {
         return name;
     }
 
-    protected int getRequestPhoneId(NetworkRequest networkRequest) {
+    /**
+     * return the request slotId, i.e. the SvltePhoneProxy index/phoneId.
+     */
+    private int getRequestPhoneId(NetworkRequest networkRequest) {
         String specifier = networkRequest.networkCapabilities.getNetworkSpecifier();
+        String apn = apnForNetworkRequest(networkRequest);
+        logd("getRequestPhoneId apn = " + apn);
+
         int subId;
         if (specifier == null || specifier.equals("")) {
             subId = mSubController.getDefaultDataSubId();
@@ -712,26 +969,93 @@ public class DctController extends Handler {
             subId = Integer.parseInt(specifier);
         }
         int phoneId = mSubController.getPhoneId(subId);
-        if (!SubscriptionManager.isValidPhoneId(phoneId)) {
+        logd("getRequestPhoneId:specifier=" + specifier + " sub=" + subId + " phoneId=" + phoneId);
+
+        // Google design in the case of invalid phone id would go establish SIM1 (phoneId=0).
+        // It might to handle issue like request data with no specifier or using startUsingNewtork
+        // API.
+        // However, this resulting issue that data icon appear and disappear again in some case.
+        // Scenario:
+        //     SIM A at slot1 and set it as default data,
+        //     Remove SIMA and insert SIMB at slot1 and set it as default data.
+        //     Re-insert SIM A back to slot1, reboot and do not click the default data pop-up.
+        if (!SubscriptionManager.isValidPhoneId(phoneId)
+                && !PhoneConstants.APN_TYPE_DEFAULT.equals(apn)) {
             phoneId = 0;
             if (!SubscriptionManager.isValidPhoneId(phoneId)) {
                 throw new RuntimeException("Should not happen, no valid phoneId");
             }
         }
+
+        // M: [C2K][IRAT] change phone ID for IRAT.
+        logd("before mapping, getRequestPhoneId phoneId= " + phoneId);
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            phoneId = SvlteUtils.getSlotId(phoneId);
+        }
+        logd("getRequestPhoneId phoneId= " + phoneId);
         return phoneId;
     }
 
-    protected static void logd(String s) {
-        if (DBG) Rlog.d(LOG_TAG, s);
+    private BroadcastReceiver mShutDownIpoIntentReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            logd("onReceive: action=" + action);
+            if (action != null && action.equals(ACTION_SHUTDOWN_IPO)) {
+                logd("IPO Shutdown, clear PROPERTY_DATA_ALLOW_SIM, PROPERTY_IA_APN_SET_ICCID");
+                SystemProperties.set(PROPERTY_DATA_ALLOW_SIM, "");
+                SystemProperties.set(PROPERTY_IA_APN_SET_ICCID, "");
+                SystemProperties.set(PROPERTY_TEMP_IA, "");
+                SystemProperties.set(PROPERTY_TEMP_IA_APN, "");
+            } else if (action != null && action.equals(
+                    TelephonyIntents.ACTION_SET_RADIO_TECHNOLOGY_DONE)) {
+                /// M: svlte mode switch, group maybe changed, update group id
+                for( int i = 0; i < mPhoneNum; i++) {
+                    ((DctController.TelephonyNetworkFactory) mNetworkFactory[i]).updateGroupId();
+                }
+                logd("receive set radio tech done, update group DSDS/DSDA mode");
+            }
+        }
+    };
+
+    private boolean mIsSubInfoUpdateReceiverRegistered = false;
+    private BroadcastReceiver mSubInfoUpdateIntentReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            logd("onReceive: action=" + action);
+            if (action.equals(TelephonyIntents.ACTION_SUBINFO_RECORD_UPDATED)) {
+                int detectedType = intent.getIntExtra(SubscriptionManager.INTENT_KEY_DETECT_STATUS,
+                        SubscriptionManager.EXTRA_VALUE_NOCHANGE);
+                logd("detectedType:" + detectedType);
+                if (detectedType != SubscriptionManager.EXTRA_VALUE_NOCHANGE) {
+                    mDataSubSelector.onSubInfoReady(intent);
+                }
+                onSubInfoReady();
+            }
+        }
+    };
+
+    private static void logv(String s) {
+        if (DBG) Rlog.v(LOG_TAG, "[DctController] " + s);
     }
 
-    protected static void loge(String s) {
-        if (DBG) Rlog.e(LOG_TAG, s);
+    private static void logd(String s) {
+        if (DBG) Rlog.d(LOG_TAG, "[DctController] " + s);
     }
 
-    protected class TelephonyNetworkFactory extends NetworkFactory {
+    private static void logw(String s) {
+        if (DBG) Rlog.w(LOG_TAG, "[DctController] " + s);
+    }
+
+    private static void loge(String s) {
+        if (DBG) Rlog.e(LOG_TAG, "[DctController] " + s);
+    }
+
+    private class TelephonyNetworkFactory extends NetworkFactory {
         private final SparseArray<NetworkRequest> mPendingReq = new SparseArray<NetworkRequest>();
         private Phone mPhone;
+        private int mGroupId;
 
         private class RequestLogger {
             public NetworkRequest request;
@@ -752,7 +1076,13 @@ public class DctController extends Handler {
                 NetworkCapabilities nc) {
             super(l, c, TAG, nc);
             mPhone = phone;
-            log("NetworkCapabilities: " + nc);
+            int phoneId = mPhone.getPhoneId();
+            // M: mapping LTE phone id to slot index
+            if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                phoneId = SvlteUtils.getSlotId(phoneId);
+            }
+            mGroupId = getGroupId(phoneId);
+            log("NetworkCapabilities: " + nc + ", mGroupId = " + mGroupId);
         }
 
         public LocalLog requestLog(int requestId, String l) {
@@ -789,21 +1119,45 @@ public class DctController extends Handler {
             // figure out the apn type and enable it
             log("Cellular needs Network for " + networkRequest);
 
+            //C2K
+            int subId = mPhone.getSubId();
+            if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                subId = SvlteUtils.getSvlteSubIdBySubId(subId);
+            }
+
             final LocalLog l = addLogger(networkRequest);
 
-            if (!SubscriptionManager.isUsableSubIdValue(mPhone.getSubId()) ||
-                    getRequestPhoneId(networkRequest) != mPhone.getPhoneId()) {
-                final String str = "Request not useable, pending request.";
-                log(str);
-                l.log(str);
-                mPendingReq.put(networkRequest.requestId, networkRequest);
-                return;
+            int requestPhoneId = getRequestPhoneId(networkRequest);
+            int currentPhoneId = mPhone.getPhoneId();
+            log("[IRAT_DctController] needNetworkFor: requestPhoneId = "
+                    + requestPhoneId + ", currentPhoneId = " + currentPhoneId);
+            // M: mapping LTE phone id to slot index
+            if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                currentPhoneId = SvlteUtils.getSlotId(currentPhoneId);
+            }
+
+            if ((!SubscriptionManager.isUsableSubIdValue(subId)) ||
+                    //For C2K
+                    //getRequestPhoneId(networkRequest) != mPhone.getPhoneId() ||
+                    (requestPhoneId != currentPhoneId)) {
+                if (isSkipEimsCheck(networkRequest, currentPhoneId)) {
+                    log("Sub Info has not been ready or during IRAT, but EIMS request, not put into"
+                            + "pending request!!");
+                } else {
+                    final String str = "Sub Info has not been ready"
+                                       + " or during IRAT, pending request.";
+                    log(str);
+                    l.log(str);
+                    mPendingReq.put(networkRequest.requestId, networkRequest);
+                    return;
+                }
             }
 
             DcTrackerBase dcTracker =((PhoneBase)mPhone).mDcTracker;
             String apn = apnForNetworkRequest(networkRequest);
             if (dcTracker.isApnSupported(apn)) {
-                requestNetwork(networkRequest, dcTracker.getApnPriority(apn), l);
+                requestNetwork(networkRequest, dcTracker.getApnPriority(apn), l,
+                        currentPhoneId, mGroupId);
             } else {
                 final String str = "Unsupported APN";
                 log(str);
@@ -825,6 +1179,13 @@ public class DctController extends Handler {
                 return;
             }
 
+            // M: [C2K][IRAT] Mapping phone ID for SVLTE during release
+            int phoneId = mPhone.getPhoneId();
+            if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                phoneId = SvlteUtils.getSlotId(phoneId);
+                logd("[IRAT_DctController] releaseNetworkFor: IRAT change phone ID:" + phoneId);
+            }
+
             releaseNetwork(networkRequest);
         }
 
@@ -833,17 +1194,49 @@ public class DctController extends Handler {
             if (DBG) Rlog.d(LOG_TAG, "[TNF " + mPhone.getSubId() + "]" + s);
         }
 
+        public void addPendingRequest(NetworkRequest networkRequest) {
+            log("addPendingRequest, request:" + networkRequest);
+            mPendingReq.put(networkRequest.requestId, networkRequest);
+        }
+
         public void evalPendingRequest() {
             log("evalPendingRequest, pending request size is " + mPendingReq.size());
             int key = 0;
-            for(int i = 0; i < mPendingReq.size(); i++) {
-                key = mPendingReq.keyAt(i);
-                NetworkRequest request = mPendingReq.get(key);
-                log("evalPendingRequest: request = " + request);
+            int pendingReqSize = mPendingReq.size();
+            // The use of list to keep all reqeusts
+            List<NetworkRequest> processList = new ArrayList<NetworkRequest>();
 
-                mPendingReq.remove(request.requestId);
+            // Add requests to processList, below implementation is to avoid error while process
+            // 2 or more requests in the pending queue at the same time.
+            for (int i = 0; i < pendingReqSize; i++) {
+                key = mPendingReq.keyAt(i);
+                log("evalPendingRequest:mPendingReq= " + mPendingReq + " i=" + i + " Key = " + key);
+                NetworkRequest request = mPendingReq.get(key);
+                processList.add(request);
+            }
+
+            // Remove all request and needNetworkFor will add it to pending if necessary.
+            mPendingReq.clear();
+            log("evalPendingRequest:mPendingReq clear");
+
+            // Remove processed request.
+            for (NetworkRequest request : processList) {
+                log("evalPendingRequest:ready to do needNetworkFor and request = " + request);
                 needNetworkFor(request, 0);
             }
+        }
+
+        /**
+         * Update group ID for network factory.
+         */
+        public void updateGroupId() {
+            int phoneId = mPhone.getPhoneId();
+            // M: mapping LTE phone id to slot index
+            if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                phoneId = SvlteUtils.getSlotId(phoneId);
+            }
+            mGroupId = getGroupId(phoneId);
+            log("updateGroupId: mGroupId = " + mGroupId);
         }
 
         @Override
@@ -872,25 +1265,6 @@ public class DctController extends Handler {
             pw.decreaseIndent();
             pw.decreaseIndent();
         }
-    }
-
-    protected void setDataAllowedOnPhoneId(int phoneId, boolean dataAllowed) {
-        if (SubscriptionManager.isValidPhoneId(phoneId)) {
-            mIsDataAllowed[phoneId].set(dataAllowed);
-        }
-    }
-
-    public boolean isDataAllowedOnPhoneId(int phoneId) {
-        return SubscriptionManager.isValidPhoneId(phoneId) &&
-                mIsDataAllowed[phoneId].get();
-    }
-
-    public boolean isDdsSwitchNeeded() {
-        return mNeedsDdsSwitch.get();
-    }
-
-    public void resetDdsSwitchNeededFlag() {
-        mNeedsDdsSwitch.set(false);
     }
 
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
@@ -923,4 +1297,508 @@ public class DctController extends Handler {
         pw.println("++++++++++++++++++++++++++++++++");
         pw.flush();
     }
+
+    //MTK START
+    /** M: get acive data phone Id */
+    public int getActiveDataPhoneId() {
+        int activePhoneId = SubscriptionManager.INVALID_PHONE_INDEX;
+        for (int i = 0; i < mDcSwitchStateMachine.length; i++) {
+            if (!mDcSwitchAsyncChannel[i].isIdleSync()) {
+                activePhoneId = i;
+                break;
+            }
+        }
+        return activePhoneId;
+    }
+
+    /** M: allow data service or not and can set a max timeout for setting data not allowed */
+    public void setDataAllowed(long subId, boolean allowed, String reason, long timeout) {
+        logd("setDataAllowed subId=" + subId + ", allowed=" + allowed + ", reason="
+            + reason + ", timeout=" + timeout);
+        mDataAllowed = allowed;
+        if (mDataAllowed) {
+            mRspHandler.removeCallbacks(mDataNotAllowedTimeoutRunnable);
+        }
+
+        setDataAllowedReasonToDct(reason);
+        processRequests();
+
+        if (!mDataAllowed && timeout > 0) {
+            logd("start not allow data timer and timeout=" + timeout);
+            mRspHandler.postDelayed(mDataNotAllowedTimeoutRunnable, timeout);
+        }
+    }
+
+    private void setDataAllowedReasonToDct(String reason) {
+        logd("setDataAllowedReasonToDct reason: " + reason);
+        for (int i = 0; i < mPhoneNum; i++) {
+            PhoneBase phoneBase = getActivePhone(i);
+            DcTrackerBase dcTracker = phoneBase.mDcTracker;
+            dcTracker.mSetDataAllowedReason = reason;
+        }
+    }
+
+    /** M: try to do re-attach
+     *  Disconnect all data connections and do detach if current state is ATTACHING or ATTACHED
+     *  Once detach is done, all requests would be processed again when entering IDLE state
+     *  That means re-attach will be triggered
+     */
+    void disconnectAll() {
+        int activePhoneId = -1;
+        for (int i = 0; i < mDcSwitchStateMachine.length; i++) {
+            if (!mDcSwitchAsyncChannel[i].isIdleSync()) {
+                activePhoneId = i;
+                break;
+            }
+        }
+
+        if (activePhoneId >= 0) {
+            logd("disconnectAll, active phone:" + activePhoneId);
+            mDcSwitchAsyncChannel[activePhoneId].disconnectAll();
+        } else {
+            logd("disconnectAll but no active phone, process requests");
+        }
+    }
+
+    public synchronized void registerForDcSwitchStateChange(Handler h, int what,
+            Object obj, DcStateParam param) {
+
+        Registrant r = new Registrant(h, what, obj);
+        DcStateParam dcState = null;
+
+        if (param == null) {
+            dcState = new DcStateParam("Don't care", false);
+        } else {
+            dcState = param;
+        }
+
+        if (DBG) {
+            logd("registerForDcSwitchStateChange: dcState = " + dcState);
+        }
+
+        dcState.mRegistrant = r;
+        mDcSwitchStateChange.put(h, dcState);
+    }
+
+    public synchronized void unregisterForDcSwitchStateChange(Handler h) {
+        if (DBG) {
+            logd("unregisterForDcSwitchStateChange");
+        }
+        mDcSwitchStateChange.remove(h);
+    }
+
+    synchronized void notifyDcSwitchStateChange(String state, int phoneId, String reason) {
+        mUserCnt = 0;
+        mTransactionId++;
+
+        for (DcStateParam param : mDcSwitchStateChange.values()) {
+            String user = param.mUser;
+            Registrant r = param.mRegistrant;
+            Message msg = null;
+
+            if (state.equals(DcSwitchStateMachine.DCSTATE_PREDETACH_CHECK) && param.mNeedCheck) {
+                msg = obtainMessage(EVENT_CONFIRM_PREDETACH, mTransactionId, phoneId, user);
+                mUserCnt++;
+            }
+
+            DcStateParam dcState = new DcStateParam(state, phoneId, reason, msg);
+            AsyncResult ar = new AsyncResult(null, dcState, null);
+            r.notifyRegistrant(ar);
+        }
+
+        if (DBG) {
+            logd("notifyDcSwitchStateChange: user:" + mUserCnt + ", ID:" + mTransactionId);
+        }
+
+        if (state.equals(DcSwitchStateMachine.DCSTATE_PREDETACH_CHECK) && mUserCnt == 0) {
+            obtainMessage(EVENT_CONFIRM_PREDETACH, mTransactionId, phoneId,
+                    "No User").sendToTarget();
+        }
+    }
+
+    private synchronized void handleConfirmPreDetach(Message msg) {
+        int transAct = msg.arg1;
+        int phoneId = msg.arg2;
+        String user = (String) msg.obj;
+
+        if (mTransactionId != transAct) {
+            if (DBG) {
+                logd("unExcept transAct: " + transAct);
+            }
+        }
+
+        if (mUserCnt > 0) {
+            mUserCnt--;
+        }
+
+        if (DBG) {
+            logd("handleConfirmPreDetach: user:" + user + ", ID:" + transAct + ", phone" + phoneId
+                + ", Remain User:" + mUserCnt);
+        }
+
+        if (mUserCnt == 0) {
+            mDcSwitchAsyncChannel[phoneId].confirmPreDetach();
+        }
+    }
+
+    private MultiSimVariants getCdmaModeConfig() {
+        MultiSimVariants config;
+        // SRLTE is always DSDS.
+        if (CdmaFeatureOptionUtils.isSrlteSupport()) {
+            return MultiSimVariants.DSDS;
+        }
+
+        int telephonyMode = SvlteModeController.getTelephonyMode();
+        logd(" getCdmaModeConfig telephonyMode = " + telephonyMode);
+        if (telephonyMode == SvlteModeController.TELEPHONY_MODE_LWTG_C
+                || telephonyMode == SvlteModeController.TELEPHONY_MODE_C_LWTG) {
+            config = MultiSimVariants.DSDA;
+        } else {
+            config = MultiSimVariants.DSDS;
+        }
+        return config;
+    }
+
+    public String getDcSwitchState(int phoneId) {
+        /// M: [C2K][IRAT] use IRAT support slot ID instead of LTE_SUB_ID.
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            phoneId = SvlteUtils.getSvltePhoneIdByPhoneId(phoneId);
+        }
+        String ret = mDcSwitchAsyncChannel[phoneId].requestDcSwitchStateSync();
+        logd("getDcSwitchState: Phone" + phoneId + " state = " + ret);
+        return ret;
+    }
+
+    private void setAlwaysAttachSim() {
+        MultiSimVariants config = TelephonyManager.getDefault()
+                .getMultiSimConfiguration();
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            config = getCdmaModeConfig();
+        }
+        // We divide phones into different groups according to multi sim config.
+        if (config == MultiSimVariants.DSDS
+                || config == MultiSimVariants.TSTS) {
+            String attachPhone = "";
+            attachPhone = SystemProperties.get(PROPERTY_DATA_ALLOW_SIM, "");
+            logd(" attachPhone: " + attachPhone);
+            if (attachPhone != null && !attachPhone.equals("")) {
+                int phoneId = Integer.parseInt(attachPhone);
+                if (phoneId >= 0 && phoneId < mPhoneNum) {
+                    logd("Set phone" + phoneId + " to attaching state");
+                    sendMessage(obtainMessage(EVENT_TRANSIT_TO_ATTACHING, phoneId, 0));
+                }
+            }
+        } else if (config == MultiSimVariants.DSDA) {
+            //TODO: Extend to nSmA
+            //FIXME: Need to get total group numbers
+            for (int i = 0; i < mPhoneNum; i++) {
+                sendMessage(obtainMessage(EVENT_TRANSIT_TO_ATTACHING, i, 0));
+            }
+        }
+    }
+
+    /** M: transit to attaching state. */
+    private void transitToAttachingState(int targetPhoneId) {
+        int groupId = getGroupId(targetPhoneId);
+        int topPriorityPhoneId = getTopPriorityRequestPhoneId(groupId);
+        int activePhoneId = -1;
+        if (topPriorityPhoneId == targetPhoneId
+            || (CdmaFeatureOptionUtils.isCdmaLteDcSupport() && mRequestInfos.isEmpty())) {
+            for (int i = 0; i < mDcSwitchStateMachine.length; i++) {
+                if (!mDcSwitchAsyncChannel[i].isIdleSync() && groupId == getGroupId(i)) {
+                    activePhoneId = i;
+                    break;
+                }
+            }
+            if (activePhoneId != -1 && activePhoneId != targetPhoneId) {
+                logd("transitToAttachingState: disconnect other phone");
+                mDcSwitchAsyncChannel[activePhoneId].disconnectAll();
+            } else {
+                logd("transitToAttachingState: connect");
+                mDcSwitchAsyncChannel[targetPhoneId].connect(null);
+            }
+        } else {
+            logd("transitToAttachingState: disconnect target phone");
+            mDcSwitchAsyncChannel[targetPhoneId].connect(null);
+            mDcSwitchAsyncChannel[targetPhoneId].disconnectAll();
+        }
+    }
+
+    protected ConcurrentHashMap<String, ApnContext> getApnContexts(int phoneId) {
+        PhoneBase phoneBase = getActivePhone(phoneId);
+        DcTrackerBase dcTracker = phoneBase.mDcTracker;
+        ConcurrentHashMap<String, ApnContext> apnContexts = null;
+        if (dcTracker != null) {
+            apnContexts = dcTracker.getApnContexts();
+        } else {
+            loge("DcTracker is null");
+        }
+        return apnContexts;
+    }
+
+    private void restorePendingRequest(int phoneId) {
+        // Update group ID for mode change.
+        ((DctController.TelephonyNetworkFactory) mNetworkFactory[phoneId])
+                .updateGroupId();
+
+        Iterator<Integer> iterator = mRequestInfos.keySet().iterator();
+        while (iterator.hasNext()) {
+            RequestInfo requestInfo = mRequestInfos.get(iterator.next());
+            logd("restorePendingRequest requestInfo = " + requestInfo);
+            if (requestInfo != null && getRequestPhoneId(requestInfo.request) == phoneId) {
+                ((DctController.TelephonyNetworkFactory) mNetworkFactory[phoneId])
+                        .addPendingRequest(requestInfo.request);
+                onReleaseRequest(requestInfo);
+                iterator.remove();
+            }
+        }
+    }
+
+    private boolean needExecuteRequest(RequestInfo requestInfo) {
+        RequestInfo checkInfo = mRequestInfos.get(requestInfo.request.requestId);
+        boolean ret = false;
+
+        if (!requestInfo.executed && checkInfo != null
+                && mRequestInfos.containsKey(requestInfo.request.requestId)) {
+            ret = true;
+        }
+
+        logd("needExecuteRequest return " + ret + ", checkInfo = " + checkInfo);
+
+        return ret;
+    }
+
+    public boolean isActivePhone(int phoneId) {
+        /// M: [C2K][IRAT] use IRAT support slot ID instead of LTE_SUB_ID.
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            phoneId = SvlteUtils.getSvltePhoneIdByPhoneId(phoneId);
+        }
+        return !mDcSwitchAsyncChannel[phoneId].isIdleSync();
+    }
+
+    public class DcStateParam {
+        private String mState;
+        private int mPhoneId;
+        private Message mMessage;
+
+        private String mUser;
+        private boolean mNeedCheck;
+        private Registrant mRegistrant;
+        private String mReason;
+
+        public DcStateParam(String state, int phoneId, String reason, Message msg) {
+            mState = state;
+            mPhoneId = phoneId;
+            mReason = reason;
+            mMessage = msg;
+        }
+
+        public DcStateParam(String user, boolean needCheckDisconnect) {
+            mUser = user;
+            mNeedCheck = needCheckDisconnect;
+        }
+
+        public String getState() {
+            return mState;
+        }
+
+        public int getPhoneId() {
+            return mPhoneId;
+        }
+
+        public String getReason() {
+            return mReason;
+        }
+        public boolean confirmPreCheckDetach() {
+            logd("confirmPreCheckDetach, msg = " + mMessage);
+            if (mMessage == null) {
+                return false;
+            } else {
+                mMessage.sendToTarget();
+                return true;
+            }
+        }
+
+        @Override
+        public String toString() {
+            return "[ mState=" + mState + ", mReason=" + mReason + ", mPhoneId =" + mPhoneId
+                    + ", user = " + mUser + ", needCheck = " + mNeedCheck
+                    + ", message = " + mMessage + ", Registrant = " + mRegistrant + "]";
+        }
+    }
+
+    //Multi-Group START
+    private int getGroupId(int phoneId) {
+        MultiSimVariants config = TelephonyManager.getDefault().getMultiSimConfiguration();
+        int groupId = 0;
+
+        // We divide phones into different groups according to multi sim config.
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            config = getCdmaModeConfig();
+        }
+
+        if (config == MultiSimVariants.DSDA) {
+            groupId = phoneId;
+        }
+
+        logd("getGroupId phone = " + phoneId + ", groupId = "  + groupId);
+        return groupId;
+    }
+
+    private int getGroupNumbers() {
+        MultiSimVariants config = TelephonyManager.getDefault().getMultiSimConfiguration();
+        int groupNumber = 1;
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            config = getCdmaModeConfig();
+        }
+
+        //TODO: Enhance to nSmA
+        if (config == MultiSimVariants.DSDA) {
+            groupNumber = mPhoneNum;
+        }
+
+        logd("getGroupNumbers groupNumber = " + groupNumber);
+        return groupNumber;
+    }
+
+    private int getPreferPhoneId(int groupId) {
+        //TODO: Enhance to nSmA
+        int dataPhoneId = getDefaultDataPhoneId();
+        if (dataPhoneId >= 0 && dataPhoneId < mPhoneNum && getGroupId(dataPhoneId) == groupId) {
+            logd("getPreferPhoneId: return default data phone Id = " + dataPhoneId);
+            return dataPhoneId;
+        } else {
+            String curr3GSim = SystemProperties.get("persist.radio.simswitch", "");
+            int curr3GPhoneId = -1;
+            logd("current 3G Sim = " + curr3GSim);
+            if (curr3GSim != null && !curr3GSim.equals("")) {
+                curr3GPhoneId = Integer.parseInt(curr3GSim) - 1;
+            }
+            if (curr3GPhoneId != -1 && getGroupId(curr3GPhoneId) == groupId) {
+                if (isSimInserted(curr3GPhoneId)) {
+                    logd("getPreferPhoneId return current 3G SIM: " + curr3GSim);
+                    return curr3GPhoneId;
+                } else {
+                    for (int i = 0; i < mPhoneNum; i++) {
+                        if (groupId == getGroupId(i) && isSimInserted(i)) {
+                            logd("3G sim is not inserted, return first existed sim = " + i);
+                            return i;
+                        }
+                    }
+                }
+            }
+        }
+        logd("getPreferPhoneId: no prefer phone found, return default value: " + groupId);
+        return groupId;
+    }
+    //Multi-Group END
+
+    private int getDefaultDataPhoneId() {
+        int dataPhoneId = mSubController.getPhoneId(mSubController.getDefaultDataSubId());
+        String dataIccid = "";
+        String simIccid = "";
+        if (dataPhoneId < 0 || dataPhoneId > mPhoneNum) {
+            logd("getDefaultDataPhoneId: invalid phone ID " + dataPhoneId + " ,find property");
+            dataIccid = SystemProperties.get(PROPERTY_RIL_DATA_ICCID);
+            if (dataIccid != null && !dataIccid.equals("")) {
+                for (int i = 0; i < mPhoneNum; i++) {
+                    simIccid = SystemProperties.get(PROPERTY_ICCID_SIM[i]);
+                    if (simIccid != null && dataIccid.equals(simIccid)) {
+                        logd("getDefaultDataPhoneId: Sim" + i + " iccid matched: " + simIccid);
+                        dataPhoneId = i;
+                        break;
+                    }
+                }
+            }
+        }
+        logd("getDefaultDataPhoneId: dataPhoneId = " + dataPhoneId);
+
+        return dataPhoneId;
+    }
+
+    //MTK END
+    //  PhoneBase phoneBase = (PhoneBase)phone.getActivePhone();
+    private int get4gCapPhoneId() {
+        String curr3GSim = SystemProperties.get("persist.radio.simswitch", "");
+        int curr3GPhoneId = -1;
+        logd("current 3G Sim = " + curr3GSim);
+        if (curr3GSim != null && !curr3GSim.equals("")) {
+            curr3GPhoneId = Integer.parseInt(curr3GSim) - 1;
+        }
+        return curr3GPhoneId;
+    }
+
+    //MTK START for EIMS
+    private boolean isSkipEimsCheck(NetworkRequest networkRequest, int phoneId) {
+
+        if (networkRequest.networkCapabilities.hasCapability(
+                NetworkCapabilities.NET_CAPABILITY_EIMS)) {
+
+            //Check if sim inserted
+            for (int i = 0; i < mPhoneNum; i++) {
+                if (isSimInserted(i)) {
+                    logd("isSkipEimsCheck: not without sim case, don't ignore.");
+                    return false;
+                }
+            }
+
+            int curr4gCapPhone = get4gCapPhoneId();
+
+            if (phoneId == curr4gCapPhone) {
+                logd("isSkipEimsCheck: pass phone" + phoneId);
+                return true;
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    //MTK END: for EIMS
+
+    //C2K SVLTE
+    private PhoneBase getActivePhone(int phoneId) {
+        PhoneBase psPhone = null;
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport() && SvlteUtils.isActiveSvlteMode(phoneId)) {
+            psPhone = (PhoneBase) ((SvltePhoneProxy) mPhones[phoneId]).getPsPhone();
+        } else {
+            psPhone = (PhoneBase) ((PhoneProxy) mPhones[phoneId]).getActivePhone();
+        }
+        return psPhone;
+    }
+
+    private boolean isNetworkRequestSuspend() {
+        return mSuspendNetworkRequest;
+    }
+
+    /**
+     * Suspend network request and data switch request.
+     */
+    public void suspendNetworkRequest() {
+        logd("[IRAT_DctController] suspendNetworkRequest: mSuspendNetworkRequest = "
+                + mSuspendNetworkRequest);
+        mSuspendNetworkRequest = true;
+    }
+
+    /**
+     * Resume network request, called in IRAT finished.
+     */
+    public void resumeNetworkRequest() {
+        logd("[IRAT_DctController] resumeNetworkRequest: mSuspendNetworkRequest = "
+                + mSuspendNetworkRequest);
+        mSuspendNetworkRequest = false;
+
+        if (mHasPendingDataSwitch) {
+            onSettingsChanged();
+            mHasPendingDataSwitch = false;
+        }
+    }
+    //M: [C2K][IRAT] end }@
+
+    private boolean isSimInserted(int phoneId) {
+        String iccid = SystemProperties.get(PROPERTY_ICCID_SIM[phoneId], "");
+        return !TextUtils.isEmpty(iccid) && !INVALID_ICCID.equals(iccid);
+    }
 }
+

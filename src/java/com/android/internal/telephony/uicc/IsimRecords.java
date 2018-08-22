@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2011 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,6 +20,10 @@
  */
 
 package com.android.internal.telephony.uicc;
+
+// MTK-START
+import android.os.Message;
+// MTK-END
 
 /**
  * {@hide}
@@ -61,4 +70,28 @@ public interface IsimRecords {
      * @return the response of ISIM Authetification, or null if not available
      */
     String getIsimChallengeResponse(String nonce);
+
+    // MTK-START
+    /**
+     * Returns the GBA bootstrapping parameters (GBABP) that was loaded from the ISIM.
+     * @return GBA bootstrapping parameters or null if not present or not loaded
+     */
+    public String getIsimGbabp();
+
+    /**
+     * Set the GBA bootstrapping parameters (GBABP) value into the ISIM.
+     * @param gbabp a GBA bootstrapping parameters value in String type
+     * @param onComplete
+     *        onComplete.obj will be an AsyncResult
+     *        ((AsyncResult)onComplete.obj).exception == null on success
+     *        ((AsyncResult)onComplete.obj).exception != null on fail
+     */
+    public void setIsimGbabp(String gbabp, Message onComplete);
+
+    /**
+     * Returns the Public Service Identity of the SM-SC (PSISMSC) that was loaded from the ISIM.
+     * @return PSISMSC or null if not present or not loaded
+     */
+    public byte[] getEfPsismsc();
+    // MTK-END
 }

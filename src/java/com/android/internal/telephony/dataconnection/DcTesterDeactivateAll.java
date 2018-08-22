@@ -88,6 +88,13 @@ public class DcTesterDeactivateAll {
         }
     }
 
+    // M: [C2K][IRAT] update phone for test class. @{
+    void updatePhone(PhoneBase phone) {
+        log("DcTesterDeactivateAll, updatePhone");
+        mPhone = phone;
+    }
+    // M: }@
+
     private static void log(String s) {
         Rlog.d(LOG_TAG, s);
     }

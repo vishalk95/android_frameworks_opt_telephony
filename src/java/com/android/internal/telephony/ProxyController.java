@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2013 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,8 +31,11 @@ import android.os.Handler;
 import android.os.Message;
 import android.os.PowerManager;
 import android.os.PowerManager.WakeLock;
+import android.os.SystemProperties;
+import android.provider.Settings;
 import android.telephony.RadioAccessFamily;
 import android.telephony.Rlog;
+import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.util.Log;
 
@@ -44,6 +52,11 @@ import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.HashSet;
+
+import com.mediatek.internal.telephony.cdma.CdmaFeatureOptionUtils;
+import com.mediatek.internal.telephony.ltedc.svlte.SvlteModeController;
+import com.mediatek.internal.telephony.RadioCapabilitySwitchUtil;
+import com.mediatek.internal.telephony.worldphone.WorldPhoneUtil;
 
 public class ProxyController {
     static final String LOG_TAG = "ProxyController";
@@ -110,6 +123,7 @@ public class ProxyController {
     private int[] mNewRadioAccessFamily;
     private int[] mOldRadioAccessFamily;
 
+    private boolean mIsCapSwitching;
 
     //***** Class Methods
     public static ProxyController getInstance(Context context, PhoneProxy[] phoneProxy,
@@ -133,8 +147,7 @@ public class ProxyController {
         mUiccController = uiccController;
         mCi = ci;
 
-        mDctController = TelephonyPluginDelegate.getInstance()
-            .makeDctController((PhoneProxy[])phoneProxy);
+        mDctController = DctController.makeDctController(phoneProxy);
         mUiccPhoneBookController = new UiccPhoneBookController(mProxyPhones);
         mPhoneSubInfoController = new PhoneSubInfoController(mProxyPhones);
         mUiccSmsController = new UiccSmsController(mProxyPhones);
@@ -229,6 +242,146 @@ public class ProxyController {
         if (rafs.length != mProxyPhones.length) {
             throw new RuntimeException("Length of input rafs must equal to total phone count");
         }
+        // check if FTA mode
+        if (SystemProperties.getInt("gsm.gcf.testmode", 0) == 2) {
+            completeRadioCapabilityTransaction();
+            logd("skip switching because FTA mode");
+            return true;
+        }
+        // check if EM disable mode
+        if (SystemProperties.getInt("persist.radio.simswitch.emmode", 1) == 0) {
+            completeRadioCapabilityTransaction();
+            logd("skip switching because EM disable mode");
+            return true;
+        }
+        // check if in call
+        if (TelephonyManager.getDefault().getCallState() != TelephonyManager.CALL_STATE_IDLE) {
+            throw new RuntimeException("in call, fail to set RAT for phones");
+        }
+        int airplaneMode = Settings.Global.getInt(
+                mContext.getContentResolver(),
+                Settings.Global.AIRPLANE_MODE_ON, 0);
+        if (airplaneMode > 0) {
+            throw new RuntimeException("airplane mode is on, fail to set RAT for phones");
+        }
+        // check radio available
+        for (int i = 0; i < mProxyPhones.length; i++) {
+            if (!mProxyPhones[i].isRadioAvailable()) {
+                throw new RuntimeException("Phone" + i + " is not available");
+            }
+        }
+        // check if still switching
+        if (mIsCapSwitching == true) {
+            throw new RuntimeException("is still switching");
+        }
+        int switchStatus = Integer.valueOf(
+                SystemProperties.get(PhoneConstants.PROPERTY_CAPABILITY_SWITCH, "1"));
+        // check parameter
+        boolean bIsboth3G = false;
+        boolean bIsMajorPhone = false;
+        int newMajorPhoneId = 0;
+        for (int i = 0; i < rafs.length; i++) {
+            bIsMajorPhone = false;
+            if (SystemProperties.getInt("ro.mtk_lte_support", 0) == 1) {
+                if ((rafs[i].getRadioAccessFamily() & RadioAccessFamily.RAF_LTE)
+                        == RadioAccessFamily.RAF_LTE) {
+                    bIsMajorPhone = true;
+                }
+            } else {
+            if ((rafs[i].getRadioAccessFamily() & RadioAccessFamily.RAF_UMTS)
+                    == RadioAccessFamily.RAF_UMTS) {
+                    bIsMajorPhone = true;
+                }
+            }
+            if (bIsMajorPhone) {
+                newMajorPhoneId = rafs[i].getPhoneId();
+                if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                    if (newMajorPhoneId == SubscriptionManager.LTE_DC_PHONE_ID_1) {
+                        // reset md1 phone id mapping from LTE_DC_PHONE_ID_1 to 0
+                        newMajorPhoneId = PhoneConstants.SIM_ID_1;
+                    }
+                    if (newMajorPhoneId == SubscriptionManager.LTE_DC_PHONE_ID_2) {
+                        // reset md1 phone id mapping from LTE_DC_PHONE_ID_2 to 1
+                        newMajorPhoneId = PhoneConstants.SIM_ID_2;
+                    }
+                }
+                if (newMajorPhoneId == (switchStatus - 1)) {
+                    completeRadioCapabilityTransaction();
+                    logd("no change, skip setRadioCapability");
+                    return true;
+                }
+                if (bIsboth3G) {
+                    logd("set more than one 3G phone, fail");
+                    throw new RuntimeException("input parameter is incorrect");
+                } else {
+                    bIsboth3G = true;
+                }
+            }
+        }
+        if (bIsboth3G == false) {
+            throw new RuntimeException("input parameter is incorrect - no 3g phone");
+        }
+
+        // External SIM [Start]
+        if (SystemProperties.getInt("ro.mtk_external_sim_support", 0) == 1) {
+            int mainPhoneId = RadioCapabilitySwitchUtil.getMainCapabilityPhoneId();
+            if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                if (mainPhoneId == SubscriptionManager.LTE_DC_PHONE_ID_1) {
+                    mainPhoneId = PhoneConstants.SIM_ID_1;
+                }
+                if (mainPhoneId == SubscriptionManager.LTE_DC_PHONE_ID_2) {
+                    mainPhoneId = PhoneConstants.SIM_ID_2;
+                }
+            }
+            String isVsimEnabledOnMain =
+                    TelephonyManager.getDefault().getTelephonyProperty(
+                    mainPhoneId, "gsm.external.sim.enabled", "0");
+            String mainPhoneIdSimType =
+                    TelephonyManager.getDefault().getTelephonyProperty(
+                    mainPhoneId, "gsm.external.sim.inserted", "0");
+
+            if (isVsimEnabledOnMain.equals("1") && mainPhoneIdSimType.equals("2")) {
+                throw new RuntimeException("vsim enabled, can't switch to another sim!");
+            }
+        }
+        // External SIM [End]
+
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            String OPTR = SystemProperties.get("ro.operator.optr");
+            String OPSEG = SystemProperties.get("ro.operator.seg");
+            logd("OPTR = " + OPTR + " OPSEG = "+ OPSEG);
+            // for OP09 A project
+            if ("OP09".equals(OPTR) && "SEGDEFAULT".equals(OPSEG)){
+               if (RadioCapabilitySwitchUtil.isSimContainsCdmaApp(PhoneConstants.SIM_ID_1)) {
+                   if (newMajorPhoneId == PhoneConstants.SIM_ID_2) {
+                       logd("CDMA sim is inserted in slot1, skip sim switch");
+                       completeRadioCapabilityTransaction();
+                       return true;
+                   }
+               }
+               if (SvlteModeController.getRadioTechnologyMode() ==
+                       SvlteModeController.RADIO_TECH_MODE_SVLTE) {
+                   if (newMajorPhoneId == PhoneConstants.SIM_ID_2) {
+                      // check sim 1 status
+                      String sim1IccId = SystemProperties.get("ril.iccid.sim1");
+                      if (!sim1IccId.equals("N/A")) {
+                          completeRadioCapabilityTransaction();
+                          logd("want to switch 3/4G to GSMphone in SVLTE mode, skip it");
+                          return true;
+                      }
+                   }
+               }
+            } else {
+               // Non OP09 A project,follow OM project rule
+               logd("Non OP09 A project follow OM project rule");
+            }
+        }
+        if (false == RadioCapabilitySwitchUtil.isNeedSwitchInOpPackage(mProxyPhones, rafs)) {
+            completeRadioCapabilityTransaction();
+            logd("no change in op check, skip setRadioCapability");
+            return true;
+        }
+
         // Check if there is any ongoing transaction and throw an exception if there
         // is one as this is a programming error.
         synchronized (mSetRadioAccessFamilyStatus) {
@@ -254,21 +407,13 @@ public class ProxyController {
             // It isn't really an error, so return true - everything is OK.
             return true;
         }
-
-        // Proceed with flex map only if both phones have valid RAF/modemUuid values.
-        // Sometimes due to phone object switch existing phone RAF values disposed which can
-        // cause both phoens to link same modemUuid.
-        for (int i = 0; i < mProxyPhones.length; i++) {
-            int raf = mProxyPhones[i].getRadioAccessFamily();
-            String modemUuid = mProxyPhones[i].getModemUuId();
-            if ((raf == RadioAccessFamily.RAF_UNKNOWN) ||
-                     (modemUuid == null) || (modemUuid.length() == 0)) {
-                logd("setRadioCapability: invalid RAF = " + raf + " or modemUuid = " +
-                         modemUuid + " for phone = " + i);
-                return false;
-            }
+        if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+            logd("set ril.cdma.switch.needupdate to 1");
+            SystemProperties.set("ril.cdma.switch.needupdate", "1");
         }
-
+        if (!WorldPhoneUtil.isWorldModeSupport() && WorldPhoneUtil.isWorldPhoneSupport()) {
+            PhoneFactory.getWorldPhone().notifyRadioCapabilityChange(newMajorPhoneId);
+        }
         // Clear to be sure we're in the initial state
         clearTransaction();
 
@@ -287,11 +432,22 @@ public class ProxyController {
         Message msg = mHandler.obtainMessage(EVENT_TIMEOUT, mRadioCapabilitySessionId, 0);
         mHandler.sendMessageDelayed(msg, SET_RC_TIMEOUT_WAITING_MSEC);
 
+        mIsCapSwitching = true;
         synchronized (mSetRadioAccessFamilyStatus) {
             logd("setRadioCapability: new request session id=" + mRadioCapabilitySessionId);
             resetRadioAccessFamilyStatusCounter();
             for (int i = 0; i < rafs.length; i++) {
                 int phoneId = rafs[i].getPhoneId();
+                if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                    if (phoneId == SubscriptionManager.LTE_DC_PHONE_ID_1) {
+                        // reset md1 phone id mapping from LTE_DC_PHONE_ID_1 to 0
+                        phoneId = PhoneConstants.SIM_ID_1;
+                    }
+                    if (phoneId == SubscriptionManager.LTE_DC_PHONE_ID_2) {
+                        // reset md1 phone id mapping from LTE_DC_PHONE_ID_2 to 1
+                        phoneId = PhoneConstants.SIM_ID_2;
+                    }
+                }
                 logd("setRadioCapability: phoneId=" + phoneId + " status=STARTING");
                 mSetRadioAccessFamilyStatus[phoneId] = SET_RC_STATUS_STARTING;
                 mOldRadioAccessFamily[phoneId] = mProxyPhones[phoneId].getRadioAccessFamily();
@@ -361,10 +517,7 @@ public class ProxyController {
     private void onStartRadioCapabilityResponse(Message msg) {
         synchronized (mSetRadioAccessFamilyStatus) {
             AsyncResult ar = (AsyncResult)msg.obj;
-            // Abort here only in Single SIM case, in Multi SIM cases
-            // send FINISH with failure so that below layers can do
-            // fall back to proper states.
-            if ((TelephonyManager.getDefault().getPhoneCount() == 1) && (ar.exception != null)) {
+            if (ar.exception != null) {
                 // just abort now.  They didn't take our start so we don't have to revert
                 logd("onStartRadioCapabilityResponse got exception=" + ar.exception);
                 mRadioCapabilitySessionId = mUniqueIdGenerator.getAndIncrement();
@@ -381,6 +534,16 @@ public class ProxyController {
             }
             mRadioAccessFamilyStatusCounter--;
             int id = rc.getPhoneId();
+            if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                if (id == SubscriptionManager.LTE_DC_PHONE_ID_1) {
+                    // reset md1 phone id mapping from LTE_DC_PHONE_ID_1 to 0
+                    id = PhoneConstants.SIM_ID_1;
+                }
+                if (id == SubscriptionManager.LTE_DC_PHONE_ID_2) {
+                    // reset md1 phone id mapping from LTE_DC_PHONE_ID_2 to 1
+                    id = PhoneConstants.SIM_ID_2;
+                }
+            }
             if (((AsyncResult) msg.obj).exception != null) {
                 logd("onStartRadioCapabilityResponse: Error response session=" + rc.getSession());
                 logd("onStartRadioCapabilityResponse: phoneId=" + id + " status=FAIL");
@@ -392,13 +555,18 @@ public class ProxyController {
             }
 
             if (mRadioAccessFamilyStatusCounter == 0) {
+                /* remove Google's code because it causes capability switch fail in 3SIM project.
+                 * mNewLogicalModemIds get same modem id in two 2G logical modem then cause WTF.
+                 */
+                /*
                 HashSet<String> modemsInUse = new HashSet<String>(mNewLogicalModemIds.length);
                 for (String modemId : mNewLogicalModemIds) {
-                    if (!modemsInUse.add(modemId)) {
+                    if (!modemsInUse.equals("") && !modemsInUse.add(modemId)) {
                         mTransactionFailed = true;
                         Log.wtf(LOG_TAG, "ERROR: sending down the same id for different phones");
                     }
                 }
+                */
                 logd("onStartRadioCapabilityResponse: success=" + !mTransactionFailed);
                 if (mTransactionFailed) {
                     // Sends a variable number of requests, so don't resetRadioAccessFamilyCounter
@@ -441,6 +609,16 @@ public class ProxyController {
             synchronized (mSetRadioAccessFamilyStatus) {
                 logd("onApplyRadioCapabilityResponse: Error response session=" + rc.getSession());
                 int id = rc.getPhoneId();
+                if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                    if (id == SubscriptionManager.LTE_DC_PHONE_ID_1) {
+                        // reset md1 phone id mapping from LTE_DC_PHONE_ID_1 to 0
+                        id = PhoneConstants.SIM_ID_1;
+                    }
+                    if (id == SubscriptionManager.LTE_DC_PHONE_ID_2) {
+                        // reset md1 phone id mapping from LTE_DC_PHONE_ID_2 to 1
+                        id = PhoneConstants.SIM_ID_2;
+                    }
+                }
                 logd("onApplyRadioCapabilityResponse: phoneId=" + id + " status=FAIL");
                 mSetRadioAccessFamilyStatus[id] = SET_RC_STATUS_FAIL;
                 mTransactionFailed = true;
@@ -471,6 +649,16 @@ public class ProxyController {
             }
 
             int id = rc.getPhoneId();
+            if (CdmaFeatureOptionUtils.isCdmaLteDcSupport()) {
+                if (id == SubscriptionManager.LTE_DC_PHONE_ID_1) {
+                    // reset md1 phone id mapping from LTE_DC_PHONE_ID_1 to 0
+                    id = PhoneConstants.SIM_ID_1;
+                }
+                if (id == SubscriptionManager.LTE_DC_PHONE_ID_2) {
+                    // reset md1 phone id mapping from LTE_DC_PHONE_ID_2 to 1
+                    id = PhoneConstants.SIM_ID_2;
+                }
+            }
             if ((((AsyncResult) msg.obj).exception != null) ||
                     (rc.getStatus() == RadioCapability.RC_STATUS_FAIL)) {
                 logd("onNotificationRadioCapabilityChanged: phoneId=" + id + " status=FAIL");
@@ -499,7 +687,7 @@ public class ProxyController {
      */
     void onFinishRadioCapabilityResponse(Message msg) {
         RadioCapability rc = (RadioCapability) ((AsyncResult) msg.obj).result;
-        if ((rc != null) && (rc.getSession() != mRadioCapabilitySessionId)) {
+        if ((rc == null) || (rc.getSession() != mRadioCapabilitySessionId)) {
             logd("onFinishRadioCapabilityResponse: Ignore session=" + mRadioCapabilitySessionId
                     + " rc=" + rc);
             return;
@@ -548,10 +736,8 @@ public class ProxyController {
                         i,
                         sessionId,
                         RadioCapability.RC_PHASE_FINISH,
-                        (mTransactionFailed ? mOldRadioAccessFamily[i] :
-                        mNewRadioAccessFamily[i]),
-                        (mTransactionFailed ? mCurrentLogicalModemIds[i] :
-                        mNewLogicalModemIds[i]),
+                        mOldRadioAccessFamily[i],
+                        mCurrentLogicalModemIds[i],
                         (mTransactionFailed ? RadioCapability.RC_STATUS_FAIL :
                         RadioCapability.RC_STATUS_SUCCESS),
                         EVENT_FINISH_RC_RESPONSE);
@@ -597,6 +783,7 @@ public class ProxyController {
             doSetRadioCapabilities(rafs);
         }
 
+        RadioCapabilitySwitchUtil.updateIccid(mProxyPhones);
         // Broadcast that we're done
         mContext.sendBroadcast(intent);
     }
@@ -604,6 +791,7 @@ public class ProxyController {
     // Clear this transaction
     private void clearTransaction() {
         logd("clearTransaction");
+        mIsCapSwitching = false;
         synchronized(mSetRadioAccessFamilyStatus) {
             for (int i = 0; i < mProxyPhones.length; i++) {
                 logd("clearTransaction: phoneId=" + i + " status=IDLE");
@@ -625,6 +813,11 @@ public class ProxyController {
 
     private void sendRadioCapabilityRequest(int phoneId, int sessionId, int rcPhase,
             int radioFamily, String logicalModemId, int status, int eventId) {
+        //TBD, work around for CDMAphone lost ModemID,@{
+        if (logicalModemId == null || logicalModemId.equals("")){
+            logicalModemId = "modem_sys3";
+        }
+        //}
         RadioCapability requestRC = new RadioCapability(
                 phoneId, sessionId, rcPhase, radioFamily, logicalModemId, status);
         mProxyPhones[phoneId].setRadioCapability(
@@ -694,5 +887,14 @@ public class ProxyController {
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    /**
+     * Check if under capability switching.
+     *
+     * @return true if switching
+     */
+    public boolean isCapabilitySwitching() {
+        return mIsCapSwitching;
     }
 }
