@@ -136,14 +136,37 @@ public class RIL extends BaseCommands implements CommandsInterface {
     static final int RIL_REQUEST_SWITCH_CARD_TYPE = (RIL_REQUEST_VENDOR_BASE + 131);
 
     static final int RIL_UNSOL_VENDOR_BASE = 3000;
-    static final int RIL_UNSOL_RESPONSE_PS_NETWORK_STATE_CHANGED = (RIL_UNSOL_VENDOR_BASE + 15);
-    static final int RIL_UNSOL_RESPONSE_REGISTRATION_SUSPENDED = (RIL_UNSOL_VENDOR_BASE + 24);
     static final int RIL_UNSOL_INCOMING_CALL_INDICATION = (RIL_UNSOL_VENDOR_BASE + 42);
-    static final int RIL_UNSOL_CALL_INFO_INDICATION = (RIL_UNSOL_VENDOR_BASE + 49);
     static final int RIL_UNSOL_MD_STATE_CHANGE = (RIL_UNSOL_VENDOR_BASE + 53);
     static final int RIL_UNSOL_SET_ATTACH_APN = (RIL_UNSOL_VENDOR_BASE + 73);
-    static final int RIL_UNSOL_MAL_AT_INFO = (RIL_UNSOL_VENDOR_BASE + 74);
-    static final int RIL_UNSOL_MAIN_SIM_INFO = (RIL_UNSOL_VENDOR_BASE + 75);
+    static final int RIL_UNSOL_MAL_AT_INFO = 3074;
+    static final int RIL_UNSOL_RADIO_CAPABILITY = 1042;
+    static final int RIL_UNSOL_MAIN_SIM_INFO = 3075;
+    static final int RIL_UNSOL_RESPONSE_RADIO_STATE_CHANGED = 1000;
+    static final int RIL_UNSOL_RESPONSE_SIM_STATUS_CHANGED = 1019;
+    static final int RIL_UNSOL_RESPONSE_VOICE_NETWORK_STATE_CHANGED = 1002;
+    static final int RIL_UNSOL_CALL_FORWARDING = 3040;
+    static final int RIL_UNSOL_PHB_READY_NOTIFICATION = 3002;
+    static final int RIL_UNSOL_SIGNAL_STRENGTH = 1009;
+    static final int RIL_UNSOL_RESPONSE_PS_NETWORK_STATE_CHANGED = 3015;
+    static final int RIL_UNSOL_ON_USSD = 1006;
+    static final int RIL_UNSOL_NITZ_TIME_RECEIVED = 1008;
+    static final int RIL_UNSOL_EMERGENCY_BEARER_SUPPORT_NOTIFY = 3059;
+    static final int RIL_UNSOL_RIL_CONNECTED = 1034;
+    static final int RIL_UNSOL_DATA_ALLOWED = 3046;
+    static final int RIL_UNSOL_RESTRICTED_STATE_CHANGED = 1023;
+    static final int RIL_UNSOL_STK_SESSION_END = 1012;
+    static final int RIL_UNSOL_STK_PROACTIVE_COMMAND = 1013;
+    static final int RIL_UNSOL_STK_EVENT_NOTIFY = 1014;
+    static final int RIL_UNSOL_RESPONSE_PLMN_CHANGED = 3023;
+    static final int RIL_UNSOL_RESPONSE_REGISTRATION_SUSPENDED = 3024;
+    static final int RIL_UNSOL_SMS_READY_NOTIFICATION = 3006;
+    static final int RIL_UNSOL_VOLTE_EPS_NETWORK_FEATURE_SUPPORT = 3048;
+    static final int RIL_UNSOL_CALL_INFO_INDICATION = 3049;
+    static final int RIL_UNSOL_RESPONSE_CALL_STATE_CHANGED = 1001;
+    static final int RIL_UNSOL_STK_CC_ALPHA_NOTIFY = 1044;
+    static final int RIL_UNSOL_CRSS_NOTIFICATION = 3041;
+    static final int RIL_UNSOL_RESPONSE_NEW_SMS = 1003;
 
     /**
      * Wake lock timeout should be longer than the longest timeout in
@@ -4489,7 +4512,8 @@ public class RIL extends BaseCommands implements CommandsInterface {
                 return "REQUEST_STK_SEND_TERMINAL_RESPONSE";
             case RIL_REQUEST_STK_HANDLE_CALL_SETUP_REQUESTED_FROM_SIM:
                 return "REQUEST_STK_HANDLE_CALL_SETUP_REQUESTED_FROM_SIM";
-            case RIL_REQUEST_EXPLICIT_CALL_TRANSFER: return "REQUEST_EXPLICIT_CALL_TRANSFER";
+            case RIL_REQUEST_EXPLICIT_CALL_TRANSFER:
+	        return "REQUEST_EXPLICIT_CALL_TRANSFER";
             case RIL_REQUEST_SET_PREFERRED_NETWORK_TYPE:
                 return "REQUEST_SET_PREFERRED_NETWORK_TYPE";
             case RIL_REQUEST_GET_PREFERRED_NETWORK_TYPE:
@@ -4747,7 +4771,7 @@ public class RIL extends BaseCommands implements CommandsInterface {
             case RIL_UNSOL_HARDWARE_CONFIG_CHANGED:
                 return "RIL_UNSOL_HARDWARE_CONFIG_CHANGED";
             case RIL_UNSOL_RADIO_CAPABILITY:
-                return "RIL_UNSOL_RADIO_CAPABILITY";
+                return "UNSOL_RADIO_CAPABILITY";
             case RIL_UNSOL_ON_SS:
                 return "UNSOL_ON_SS";
             case RIL_UNSOL_STK_CC_ALPHA_NOTIFY:
@@ -4762,24 +4786,48 @@ public class RIL extends BaseCommands implements CommandsInterface {
                 return "RIL_UNSOL_CARRIER_INFO_IMSI_ENCRYPTION";
             case RIL_UNSOL_NETWORK_SCAN_RESULT:
                 return "RIL_UNSOL_NETWORK_SCAN_RESULT";
-	        case RIL_UNSOL_RESPONSE_REGISTRATION_SUSPENDED:
-	            return "RIL_UNSOL_RESPONSE_REGISTRATION_SUSPENDED";
-	        case RIL_UNSOL_INCOMING_CALL_INDICATION:
+	    case RIL_UNSOL_RESPONSE_REGISTRATION_SUSPENDED:
+	        return "RIL_UNSOL_RESPONSE_REGISTRATION_SUSPENDED";
+	    case RIL_UNSOL_INCOMING_CALL_INDICATION:
                 return "RIL_UNSOL_INCOMING_CALL_INDICATION";
-	        case RIL_UNSOL_CALL_INFO_INDICATION:
-	            return "RIL_UNSOL_CALL_INFO_INDICATION";
-	        case RIL_UNSOL_CALL_PROGRESS:
-	            return "RIL_UNSOL_CALL_PROGRESS";
-	        case RIL_UNSOL_MD_STATE_CHANGE:
-		        return "RIL_UNSOL_MD_STATE_CHANGE";
-	        case RIL_UNSOL_SET_ATTACH_APN:
+	    case RIL_UNSOL_CALL_INFO_INDICATION:
+	        return "RIL_UNSOL_CALL_INFO_INDICATION";
+	    case RIL_UNSOL_CALL_PROGRESS:
+	        return "RIL_UNSOL_CALL_PROGRESS";
+	    case RIL_UNSOL_MD_STATE_CHANGE:
+                return "RIL_UNSOL_MD_STATE_CHANGE";
+	    case RIL_UNSOL_SET_ATTACH_APN:
                 return "RIL_UNSOL_SET_ATTACH_APN";
-	        case RIL_UNSOL_RESPONSE_PS_NETWORK_STATE_CHANGED:
+	    case RIL_UNSOL_RESPONSE_PS_NETWORK_STATE_CHANGED:
                 return "RIL_UNSOL_RESPONSE_PS_NETWORK_STATE_CHANGED";
-	        case RIL_UNSOL_MAL_AT_INFO:
+	    case RIL_UNSOL_MAL_AT_INFO:
                 return "RIL_UNSOL_MAL_AT_INFO";
-	        case RIL_UNSOL_MAIN_SIM_INFO:
+	    case RIL_UNSOL_MAIN_SIM_INFO:
                 return "RIL_UNSOL_MAIN_SIM_INFO";
+            case RIL_UNSOL_RESPONSE_VOICE_NETWORK_STATE_CHANGED:
+                return "UNSOL_RESPONSE_VOICE_NETWORK_STATE_CHANGED";
+            case RIL_UNSOL_CALL_FORWARDING:
+                return "RIL_UNSOL_CALL_FORWARDING";
+            case RIL_UNSOL_PHB_READY_NOTIFICATION:
+                return "RIL_UNSOL_PHB_READY_NOTIFICATION";
+            case RIL_UNSOL_EMERGENCY_BEARER_SUPPORT_NOTIFY:
+                return "RIL_UNSOL_EMERGENCY_BEARER_SUPPORT_NOTIFY";
+            case RIL_UNSOL_VOLTE_EPS_NETWORK_FEATURE_SUPPORT:
+                return "RIL_UNSOL_VOLTE_EPS_NETWORK_FEATURE_SUPPORT";
+            case RIL_UNSOL_RIL_CONNECTED:
+                return "UNSOL_RIL_CONNECTED";
+            case RIL_UNSOL_DATA_ALLOWED:
+                return "RIL_UNSOL_DATA_ALLOWED";
+            case RIL_UNSOL_RESPONSE_PLMN_CHANGED:
+                return "RIL_UNSOL_RESPONSE_PLMN_CHANGED";
+            case RIL_UNSOL_SMS_READY_NOTIFICATION:
+                return "RIL_UNSOL_SMS_READY_NOTIFICATION";
+            case RIL_UNSOL_VOLTE_EPS_NETWORK_FEATURE_SUPPORT:
+                return "RIL_UNSOL_VOLTE_EPS_NETWORK_FEATURE_SUPPORT";
+            case RIL_UNSOL_CRSS_NOTIFICATION:
+                return "RIL_UNSOL_CRSS_NOTIFICATION";
+            case RIL_UNSOL_RESPONSE_NEW_SMS:
+                return "UNSOL_RESPONSE_NEW_SMS";
             default:
                 return "<unknown response>";
         }
