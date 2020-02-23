@@ -1463,6 +1463,7 @@ public class GsmCdmaPhone extends Phone {
 
     @Override
     public String getDeviceId() {
+		mImei = SystemProperties.get("gsm.ril.imei1");
         if (isPhoneTypeGsm()) {
             return mImei;
         } else {
@@ -1484,6 +1485,7 @@ public class GsmCdmaPhone extends Phone {
     @Override
     public String getDeviceSvn() {
         if (isPhoneTypeGsm() || isPhoneTypeCdmaLte()) {
+			mImeiSv = SystemProperties.get("gsm.ril.imeisv1");
             return mImeiSv;
         } else {
             loge("getDeviceSvn(): return 0");
@@ -1498,6 +1500,7 @@ public class GsmCdmaPhone extends Phone {
 
     @Override
     public String getImei() {
+		mImei = SystemProperties.get("gsm.ril.imei1");
         return mImei;
     }
 
@@ -2056,7 +2059,10 @@ public class GsmCdmaPhone extends Phone {
         if (found != null) {
             // Complete pending USSD
 
-            if (isUssdRelease) {
+            if (isUssdRelease && !TextUtils.isEmpty(ussdMessage)) {
+				// Some mobile networks send a release message with text instead of a notify message
+				found.onUssdFinished(ussdMessage, isUssdRequest);
+			} else if (isUssdRelease) {
                 found.onUssdRelease();
             } else if (isUssdError) {
                 found.onUssdFinishedError();
