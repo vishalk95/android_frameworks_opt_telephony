@@ -5615,8 +5615,6 @@ public class RIL extends BaseCommands implements CommandsInterface {
                 return "RIL_REQUEST_RESUME_REGISTRATION";
 	    case RIL_REQUEST_SET_CALL_INDICATION:
                  return "RIL_REQUEST_SET_CALL_INDICATION";
-	    case RIL_REQUEST_EMERGENCY_DIAL:
-	         return "RIL_REQUEST_EMERGENCY_DIAL";
 	    case RIL_REQUEST_SET_ECC_SERVICE_CATEGORY:
 	         return "RIL_REQUEST_SET_ECC_SERVICE_CATEGORY";
 	    case RIL_REQUEST_SET_ECC_LIST:
